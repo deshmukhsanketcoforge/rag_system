@@ -1,0 +1,19 @@
+# Secrets and local state
+.env
+.venv
+chroma_db/
+
+# VCS and caches
+.git
+.github
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Not needed in the image
+*.docx
+*.pdf
+*.csv
+PLAN.md
+docs/screenshots/
