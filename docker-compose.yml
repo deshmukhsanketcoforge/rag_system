@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    image: rag-system
+    # .env holds ANTHROPIC_API_KEY; optional so tests still run without it.
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      # Live-edit the code from the host while developing in the container.
+      - .:/app
+      # Persist the vector store and downloaded models across runs.
+      - chroma_data:/data
+      - hf_cache:/cache/huggingface
+
+volumes:
+  chroma_data:
+  hf_cache:
