@@ -5,6 +5,7 @@ import pytest
 
 from rag import store
 from rag.chunking import Chunk
+from rag.config import COLLECTION_NAME
 
 
 class FakeEmbedder:
@@ -123,3 +124,89 @@ def test_query_returns_nearest_first(client):
     assert hits[0]["id"] == "doc::1"
     assert hits[0]["distance"] <= hits[1]["distance"]
     assert hits[0]["metadata"]["section"] == "1. Section"
+
+
+# --- review fixes ---
+
+
+def test_embedder_failure_leaves_the_old_chunks_in_place(client):
+    """Embed and upsert happen before stale deletes, so a failure loses nothing."""
+    _sync(_chunks(3), FakeEmbedder(), client)
+
+    def exploding(texts):
+        raise RuntimeError("model download failed")
+
+    edited = _chunks(2)
+    edited[0] = Chunk("doc::0", "edited text", "doc", "0. Section", 0)  # doc::2 is now stale
+    with pytest.raises(RuntimeError):
+        _sync(edited, exploding, client)
+
+    col = store.get_collection(client)
+    assert col.count() == 3
+    assert col.get(ids=["doc::2"])["ids"] == ["doc::2"]
+    assert col.get(ids=["doc::0"])["documents"] == ["text 0"]
+
+
+def test_retry_after_a_failed_sync_completes_the_update(client):
+    _sync(_chunks(3), FakeEmbedder(), client)
+    edited = _chunks(2)
+    edited[0] = Chunk("doc::0", "edited text", "doc", "0. Section", 0)
+    with pytest.raises(RuntimeError):
+        _sync(edited, lambda texts: (_ for _ in ()).throw(RuntimeError("boom")), client)
+    col, res = _sync(edited, FakeEmbedder(), client)
+    assert (res.updated, res.deleted) == (1, 1)
+    assert col.count() == 2
+
+
+class _LockedClient:
+    def delete_collection(self, name):
+        raise PermissionError("database is locked")
+
+    def get_or_create_collection(self, *args, **kwargs):
+        raise AssertionError("must not carry on after a failed delete")
+
+
+def test_reset_collection_surfaces_real_delete_errors():
+    with pytest.raises(PermissionError):
+        store.reset_collection(_LockedClient())
+
+
+def test_rebuild_on_an_empty_store_works(client):
+    col, res = _sync(_chunks(2), FakeEmbedder(), client, rebuild=True)
+    assert col.count() == 2 and res.added == 2
+
+
+def test_sync_rejects_a_collection_with_the_wrong_distance_space(client):
+    client.create_collection(COLLECTION_NAME)  # chroma default is l2, not cosine
+    with pytest.raises(RuntimeError, match="cosine"):
+        _sync(_chunks(2), FakeEmbedder(), client)
+
+
+def test_rebuild_fixes_a_wrong_distance_space(client):
+    client.create_collection(COLLECTION_NAME)
+    col, _ = _sync(_chunks(2), FakeEmbedder(), client, rebuild=True)
+    assert col.configuration["hnsw"]["space"] == "cosine"
+
+
+def test_get_collection_rejects_the_wrong_distance_space(client):
+    client.create_collection(COLLECTION_NAME)
+    with pytest.raises(RuntimeError, match="cosine"):
+        store.get_collection(client)
+
+
+def test_metadata_changes_count_as_changes(client):
+    _sync(_chunks(2), FakeEmbedder(), client)
+    moved = [
+        Chunk("doc::0", "text 0", "doc", "0. Section", 0),
+        Chunk("doc::1", "text 1", "doc", "1. Section", 7),  # same id, text, section; new index
+    ]
+    col, res = _sync(moved, FakeEmbedder(), client)
+    assert (res.updated, res.unchanged) == (1, 1)
+    assert col.get(ids=["doc::1"])["metadatas"][0]["chunk_index"] == 7
+
+
+def test_renamed_doc_with_same_id_and_text_is_updated(client):
+    _sync([Chunk("x::0", "same", "old_name", "1. S", 0)], FakeEmbedder(), client)
+    col, res = _sync([Chunk("x::0", "same", "new_name", "1. S", 0)], FakeEmbedder(), client)
+    assert res.updated == 1
+    assert col.get(ids=["x::0"])["metadatas"][0]["doc_name"] == "new_name"

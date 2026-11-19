@@ -120,11 +120,12 @@ Code: `src/rag/chunking.py`, `embeddings.py`, `store.py`. All five documents are
 
 **Incremental ingest.** `store.sync` makes the collection match `data/raw/` with the least work:
 
-- Each stored chunk carries a `content_hash` of (embedding model + chunk settings, section, text).
+- Each stored chunk carries a `content_hash` of (embedding model + chunk settings, doc name, chunk index, section, text), so metadata changes are picked up too.
 - Unchanged chunks are skipped and never embedded again. With no edits, the model is not even loaded.
-- New and changed chunks are embedded and upserted.
+- New and changed chunks are embedded and upserted first. Stale chunks are deleted last, so a failed run (download error, out of memory, Ctrl-C) never leaves the index with fewer chunks than before.
 - Chunks that no longer exist (an edited or removed document) are deleted, so removing a document removes it from the index. The control test in the diagnosis step relies on this.
 - Changing the embedding model or the chunk size changes every hash, so everything is re-embedded instead of leaving stale vectors. `--rebuild` forces a clean slate.
+- The collection must use cosine distance. One created with another distance space is rejected with an error telling you to run `--rebuild`, instead of silently ranking wrongly.
 - IDs stay `<doc_name>::<chunk_index>`. Inserting a section mid-document shifts later indexes, so those chunks are re-embedded.
 
 **Chunking rationale** (values in `src/rag/config.py`):
@@ -133,6 +134,7 @@ Code: `src/rag/chunking.py`, `embeddings.py`, `store.py`. All five documents are
 - **Cap of 120 words.** The embedding model truncates input at 256 tokens. 120 words plus the header line measured at most 197 tokens, so nothing is cut off. Smaller chunks also retrieve more precisely than whole documents (about 650 words).
 - **Splitting.** A section over the cap is packed from its `###` subsections and never cut inside one. This splits 5 of the 50 sections.
 - **Overlap of 20 words (about 17%).** Applies only when a single block is still over the cap and has to be cut into word windows, so a fact on the boundary appears in both neighbours. No block in the current corpus needs this. The behaviour is covered by a unit test on synthetic text.
+- **Preamble and headings.** The title block (effective date, owner, any intro) becomes a "Document header" chunk under the same size cap. Headings inside fenced code blocks are not treated as sections. Files are read as UTF-8.
 - **Header line.** Each chunk starts with `<document title> - <section>`, so it reads on its own and keyword search can match the section name.
 - **Metadata:** `doc_name`, `section`, `chunk_index`. IDs are `<doc_name>::<chunk_index>`.
 
@@ -146,8 +148,9 @@ docker compose run --rm app        # container
 ```
 
 - `test_smoke.py`: imports and config values.
-- `test_chunking.py`: size cap, subsection splitting, overlap, metadata, header chunk, no empty chunks, deterministic IDs.
-- `test_store.py`: incremental sync (first ingest, no-op re-run embeds nothing, only the changed chunk is re-embedded, new chunks added, removed chunks deleted, fingerprint change and `--rebuild` re-embed all) and nearest-first query. Uses a fake embedder, so no model download is needed.
+- `test_chunking.py`: size cap, subsection splitting, overlap, metadata, header chunk (capped too), code fences, titles, UTF-8, deterministic IDs.
+- `test_store.py`: incremental sync (first ingest, no-op re-run embeds nothing, only the changed chunk is re-embedded, new chunks added, removed chunks deleted, failed embedding loses nothing, wrong distance space rejected, fingerprint change and `--rebuild` re-embed all) and nearest-first query. Uses a fake embedder, so no model download is needed.
+- `test_retrieval_check.py`: the pass/fail logic of `scripts/03_check_retrieval.py` (right document and section first, required documents present).
 
 Retrieval recall and answer accuracy tests arrive with the evaluation ticket.
 

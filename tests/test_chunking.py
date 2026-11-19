@@ -1,8 +1,9 @@
 """Chunking tests: size cap, overlap, metadata, no empty chunks. No model or API needed."""
 
 from collections import Counter
+from pathlib import Path
 
-from rag.chunking import HEADER_SECTION, chunk_corpus, chunk_document
+from rag.chunking import HEADER_SECTION, chunk_corpus, chunk_document, split_body
 from rag.config import CHUNK_MAX_WORDS, CHUNK_OVERLAP_WORDS, RAW_DIR
 
 SHORT_DOC = (
@@ -113,3 +114,78 @@ def test_each_document_has_a_header_chunk_with_date_and_owner():
         first = next(c for c in chunks if c.doc_name == doc and c.chunk_index == 0)
         assert first.section == HEADER_SECTION, doc
         assert "Effective date" in first.text and "Owner" in first.text, doc
+
+
+# --- review fixes ---
+
+
+def test_long_preamble_is_split_and_respects_the_cap():
+    preamble = " ".join(f"p{i}" for i in range(250))
+    doc = f"# Long Intro\n\n{preamble}\n\n## 1. Purpose\n\nShort."
+    chunks = chunk_document("intro", doc, max_words=100, overlap=20)
+    header = [c for c in chunks if c.section == HEADER_SECTION]
+    assert len(header) == 3
+    assert all(len(_body(c).split()) <= 100 for c in header)
+    assert {w for c in header for w in _body(c).split()} == {f"p{i}" for i in range(250)}
+    assert [c.chunk_index for c in chunks] == list(range(len(chunks)))
+
+
+def test_short_preamble_stays_one_header_chunk():
+    chunks = chunk_document("d", "# T\n\nEffective date: 2024\nOwner: X\n\n## 1. A\n\nBody.")
+    assert [c.section for c in chunks] == [HEADER_SECTION, "1. A"]
+
+
+def test_files_are_read_as_utf8_whatever_the_locale(tmp_path, monkeypatch):
+    (tmp_path / "d.md").write_text("# T\n\n## 1. A\n\nIt\u2019s a \u2014 test.", encoding="utf-8")
+    real = Path.read_text
+
+    def strict(self, encoding=None, errors=None):
+        assert encoding == "utf-8", "read_text must pass encoding='utf-8'"
+        return real(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", strict)
+    (chunk,) = [c for c in chunk_corpus(tmp_path) if c.section == "1. A"]
+    assert "It\u2019s a \u2014 test." in chunk.text
+
+
+FENCED = (
+    "# Code Doc\n\n## 1. Example\n\nRun this:\n\n```\n## not a heading\n### nor this\n```\n\n"
+    "Done.\n\n## 2. Next\n\nText."
+)
+
+
+def test_headings_inside_code_fences_do_not_split_sections():
+    chunks = chunk_document("c", FENCED)
+    assert [c.section for c in chunks] == ["1. Example", "2. Next"]
+    assert "## not a heading" in chunks[0].text and "Done." in chunks[0].text
+
+
+def test_subsection_markers_inside_fences_are_not_split_points():
+    def words(tag, n):
+        return " ".join(f"{tag}{i}" for i in range(n))
+
+    # The fenced "### " line sits just past the 100-word mark. If it were treated as a heading,
+    # a piece would start there.
+    body = (
+        f"### A\n{words('a', 90)}\n```\n### not a heading\n{words('f', 10)}\n```\n"
+        f"### B\n{words('b', 40)}"
+    )
+    pieces = split_body(body, 100, 20)
+    assert not any(p.startswith("### not a heading") for p in pieces)
+    assert sum("### not a heading" in p for p in pieces) >= 1
+    assert any(p.startswith("### B") for p in pieces)
+
+
+def test_title_keeps_hash_characters_that_are_content():
+    chunks = chunk_document("d", "# #1 Priorities\n\n## 1. A\n\nBody.")
+    assert chunks[0].text.startswith("#1 Priorities - 1. A")
+
+
+def test_document_without_a_title_block_still_chunks():
+    chunks = chunk_document("bare", "## 1. A\n\nBody one.\n\n## 2. B\n\nBody two.")
+    assert [c.section for c in chunks] == ["1. A", "2. B"]
+    assert chunks[0].text.startswith("bare - 1. A")
+
+
+def test_empty_document_gives_no_chunks():
+    assert chunk_document("empty", "  \n") == []

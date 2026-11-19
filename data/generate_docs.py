@@ -129,7 +129,7 @@ def main() -> None:
     for name in wanted:
         print(f"Generating {name} ...")
         text = generate(client, name, POLICIES[name])
-        (RAW_DIR / f"{name}.md").write_text(text)
+        (RAW_DIR / f"{name}.md").write_text(text, encoding="utf-8")
     print("Done. Review each file, then commit data/raw/.")
 
 

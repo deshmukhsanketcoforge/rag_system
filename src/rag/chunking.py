@@ -19,6 +19,9 @@ from rag.config import CHUNK_MAX_WORDS, CHUNK_OVERLAP_WORDS
 
 HEADER_SECTION = "Document header"
 
+_FENCE = re.compile(r"^\s*(```|~~~)")
+_TITLE = re.compile(r"^#\s+")
+
 
 @dataclass(frozen=True)
 class Chunk:
@@ -35,6 +38,27 @@ class Chunk:
 
 def _words(text: str) -> int:
     return len(text.split())
+
+
+def _split_before(text: str, prefix: str) -> list[str]:
+    """Split text into parts that each start at a line beginning with `prefix`.
+
+    Lines inside fenced code blocks (``` or ~~~) never count as headings, so an example that
+    contains "## ..." is not mistaken for a section. Text before the first match is its own part.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    in_fence = False
+    for line in text.splitlines(keepends=True):
+        if _FENCE.match(line):
+            in_fence = not in_fence
+        if not in_fence and line.startswith(prefix) and current:
+            parts.append("".join(current))
+            current = []
+        current.append(line)
+    if current:
+        parts.append("".join(current))
+    return parts
 
 
 def _window(text: str, max_words: int, overlap: int) -> list[str]:
@@ -57,7 +81,7 @@ def split_body(body: str, max_words: int, overlap: int) -> list[str]:
     if _words(body) <= max_words:
         return [body]
 
-    blocks = [b.strip() for b in re.split(r"(?m)^(?=### )", body) if b.strip()]
+    blocks = [b.strip() for b in _split_before(body, "### ") if b.strip()]
     pieces: list[str] = []
     current = ""
     for block in blocks:
@@ -83,15 +107,19 @@ def chunk_document(
     overlap: int = CHUNK_OVERLAP_WORDS,
 ) -> list[Chunk]:
     """Chunk one markdown document. doc_name is the file stem, e.g. 'pto_policy'."""
-    parts = re.split(r"(?m)^(?=## )", text.strip())
-    head = parts[0].strip()
-    title = head.splitlines()[0].lstrip("# ").strip() if head else doc_name
+    parts = _split_before(text.strip(), "## ")
+    if not parts:
+        return []
+    # A document that opens straight with a '## ' section has no title block.
+    head, sections = ("", parts) if parts[0].startswith("## ") else (parts[0].strip(), parts[1:])
+    title = _TITLE.sub("", head.splitlines()[0]).strip() if head else doc_name
     preamble = "\n".join(head.splitlines()[1:]).strip()
 
     raw: list[tuple[str, str]] = []  # (section, text)
-    if preamble:
-        raw.append((HEADER_SECTION, f"{title}\n\n{preamble}"))
-    for part in parts[1:]:
+    # The preamble (title block: effective date, owner, intro) obeys the same size cap.
+    for piece in split_body(preamble, max_words, overlap) if preamble else []:
+        raw.append((HEADER_SECTION, f"{title}\n\n{piece}"))
+    for part in sections:
         heading, _, body = part.partition("\n")
         section = heading.removeprefix("## ").strip()
         for piece in split_body(body, max_words, overlap):
@@ -108,5 +136,5 @@ def chunk_corpus(raw_dir: Path) -> list[Chunk]:
     """Chunk every .md file in raw_dir, in a stable (sorted) order."""
     chunks: list[Chunk] = []
     for path in sorted(raw_dir.glob("*.md")):
-        chunks.extend(chunk_document(path.stem, path.read_text()))
+        chunks.extend(chunk_document(path.stem, path.read_text(encoding="utf-8")))
     return chunks
