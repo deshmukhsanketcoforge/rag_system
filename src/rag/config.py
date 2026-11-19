@@ -3,6 +3,7 @@
 Only values known up front live here. Chunk size, overlap, top-k, RRF and
 rerank settings are added by the tickets that decide them.
 """
+
 import os
 from pathlib import Path
 

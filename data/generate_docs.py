@@ -8,6 +8,7 @@ Run once, review the output, and commit data/raw/*.md. CI must never run this.
 Planted issue (see docs/planted_issue.md): pto_policy_v1_2022.md is an outdated
 duplicate of pto_policy.md with conflicting numbers and no "superseded" marker.
 """
+
 import os
 import sys
 from pathlib import Path
@@ -30,7 +31,8 @@ Write an internal company policy document for {COMPANY}.
 Rules:
 - Output Markdown only, no preamble and no code fences.
 - Between {MIN_WORDS + 40} and {MAX_WORDS - 60} words in total (hard limit {MIN_WORDS}-{MAX_WORDS}).
-- First line: a '# ' title. Then a line with 'Effective date: <date>' and a line with 'Owner: <team>'.
+- First line: a '# ' title. Then a line with 'Effective date: <date>' and a line with
+  'Owner: <team>'.
 - Use numbered section headings exactly like '## 1. Purpose' and '## 4.2 Equipment Stipend'
   (top-level sections '## N. Title', subsections '### N.M Title').
 - Include concrete numbers (amounts, day counts, deadlines) and exact reference codes

@@ -4,6 +4,7 @@ Proves embeddings + chromadb + similarity ranking work before any pipeline code.
 
     python scripts/01_minimal_loop.py
 """
+
 import sys
 from pathlib import Path
 
@@ -42,7 +43,7 @@ def main() -> None:
     print(f"\nQuestion: {QUESTION}")
     result = collection.query(query_embeddings=[model.encode(QUESTION).tolist()], n_results=2)
     docs, dists = result["documents"][0], result["distances"][0]
-    for rank, (doc, dist) in enumerate(zip(docs, dists), start=1):
+    for rank, (doc, dist) in enumerate(zip(docs, dists, strict=True), start=1):
         print(f"  {rank}. distance={dist:.4f}  {doc}")
 
     # 5. Assert the relevant text ranks first (smaller distance = more similar).

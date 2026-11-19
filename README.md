@@ -113,10 +113,23 @@ docker compose run --rm app        # container
 
 Currently these are smoke tests (imports and config values). Tests for chunking, retrieval recall and answer accuracy arrive with their tickets.
 
+## Lint and formatting
+
+Config is in [ruff.toml](ruff.toml): line length 100, rules `E`, `F`, `I` (import order) and `B` (bugbear). Ruff is not in `requirements.txt`. Install it for local use:
+
+```bash
+pip install ruff==0.17.6
+ruff check .            # lint
+ruff check . --fix      # auto-fix what it can
+ruff format .           # format
+ruff format --check .   # what CI runs
+```
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests targeting `main`:
 
+- `lint`: runs `ruff check .` and `ruff format --check .`. It is fast and does not install the heavy dependencies.
 - `test`: installs CPU-only PyTorch and the pinned requirements, then runs `pytest -v`.
 - `docker`: builds the image and runs `pytest -v` inside it.
 
@@ -136,7 +149,7 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 ```
 .
 ├── Dockerfile, docker-compose.yml, .dockerignore
-├── requirements.txt, pytest.ini, .env.example
+├── requirements.txt, pytest.ini, ruff.toml, .env.example
 ├── .github/workflows/ci.yml
 ├── data/
 │   ├── raw/                 # generated policy documents
