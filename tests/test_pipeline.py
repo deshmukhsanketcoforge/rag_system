@@ -174,3 +174,72 @@ def test_hybrid_mode_adds_the_keyword_hit_vector_search_missed(collection):
     out = _answer("3", collection, k=2, mode="hybrid", llm=RecordingLLM())
     assert "b::1" in [c["id"] for c in out["chunks"]]
     assert all("score" in c for c in out["chunks"])
+
+
+# --- rerank mode (RAG-7) ---
+
+
+class FakeReranker:
+    """Prefers 'text 2' over everything, then 'text 3'; records the candidates it was given."""
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, pairs):
+        self.calls.append([text for _, text in pairs])
+        return [{"text 2": 2.0, "text 3": 1.0}.get(text, 0.0) for _, text in pairs]
+
+
+def test_rerank_is_a_known_mode():
+    assert "rerank" in pipeline.MODES
+
+
+def test_rerank_mode_reorders_the_candidates_and_the_llm_sees_the_new_order(collection):
+    llm = RecordingLLM()
+    reranker = FakeReranker()
+    out = _answer("text 0", collection, k=2, mode="rerank", llm=llm, reranker=reranker)
+    assert [c["id"] for c in out["chunks"]] == ["b::0", "b::1"]  # text 2, text 3
+    assert all("rerank_score" in c for c in out["chunks"])
+    assert llm.prompts[0].index("text 2") < llm.prompts[0].index("text 3")
+
+
+def test_rerank_scores_more_candidates_than_it_returns(collection):
+    reranker = FakeReranker()
+    out = _answer("text 0", collection, k=1, mode="rerank", llm=RecordingLLM(), reranker=reranker)
+    assert len(out["chunks"]) == 1
+    assert len(reranker.calls[0]) == 4  # every chunk in the store, below RERANK_CANDIDATES
+
+
+def test_a_reranker_with_another_mode_is_rejected_not_ignored(collection):
+    reranker = FakeReranker()
+    for mode in ("vector", "hybrid"):
+        with pytest.raises(ValueError, match="reranker"):
+            _answer("text 0", collection, mode=mode, llm=RecordingLLM(), reranker=reranker)
+    assert reranker.calls == []
+
+
+def test_rerank_mode_loads_the_cross_encoder_before_any_retrieval(collection, monkeypatch):
+    embedded = []
+
+    def spy_embed(texts):
+        embedded.append(texts)
+        return fake_embed(texts)
+
+    def cannot_load():
+        raise RuntimeError("the cross-encoder could not be loaded")
+
+    monkeypatch.setattr(pipeline.rr, "load_scorer", cannot_load)
+    with pytest.raises(RuntimeError, match="cross-encoder"):
+        pipeline.answer(
+            "q", mode="rerank", collection=collection, embedder=spy_embed, llm=RecordingLLM()
+        )
+    assert embedded == []  # failed before the question was embedded
+
+
+def test_rerank_mode_uses_the_loaded_scorer_when_none_is_passed(collection, monkeypatch):
+    reranker = FakeReranker()
+    monkeypatch.setattr(pipeline.rr, "load_scorer", lambda: reranker)
+    out = pipeline.answer(
+        "text 0", k=1, mode="rerank", collection=collection, embedder=fake_embed, llm=RecordingLLM()
+    )
+    assert out["chunks"][0]["id"] == "b::0" and len(reranker.calls) == 1

@@ -52,3 +52,9 @@ RRF_K = 60
 # How many candidates each search (vector, keyword) hands to the fusion step. The corpus is 50
 # chunks; 10 is generous and keeps the fused list from being padded with weak keyword matches.
 CANDIDATE_POOL = 10
+
+# --- Reranking (RAG-7) ---
+# Hybrid search hands this many candidates to the cross-encoder, which reads each (question,
+# chunk) pair together and so judges relevance better than the embedding comparison. It is slower
+# per chunk, hence a short list: 20 is 40% of this 50-chunk corpus. The final top-n is TOP_K.
+RERANK_CANDIDATES = 20
