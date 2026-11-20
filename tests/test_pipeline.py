@@ -134,15 +134,15 @@ def test_missing_collection_is_a_clear_error(monkeypatch):
         pipeline.answer("q", embedder=fake_embed, llm=RecordingLLM())
 
 
-def test_missing_api_key_fails_before_any_retrieval(collection, monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+def test_missing_llm_settings_fail_before_any_retrieval(collection, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_FOUNDRY_API_KEY", raising=False)
     calls = []
 
     def embedder(texts):
         calls.append(texts)
         return fake_embed(texts)
 
-    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
+    with pytest.raises(RuntimeError, match="ANTHROPIC_FOUNDRY_API_KEY"):
         pipeline.answer("q", collection=collection, embedder=embedder)
     assert calls == []
 

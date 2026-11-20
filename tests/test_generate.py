@@ -136,3 +136,10 @@ def test_a_question_cannot_close_its_own_tag():
 def test_chunk_with_none_metadata_does_not_crash():
     prompt = generate.build_user_prompt("q", [{"text": "t", "metadata": None, "distance": 0.1}])
     assert "unknown" in prompt
+
+
+def test_default_client_comes_from_the_llm_factory(monkeypatch):
+    fake = FakeLLM()
+    monkeypatch.setattr(generate, "llm_client", lambda: fake)
+    assert generate.generate("q", [_hit(0)]) == "The answer."
+    assert len(fake.calls) == 1

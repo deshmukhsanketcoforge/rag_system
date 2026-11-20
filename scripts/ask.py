@@ -4,7 +4,7 @@
     python scripts/ask.py "..." -k 5
     python scripts/ask.py "..." --mode vector
 
-Run scripts/02_ingest.py first, and set ANTHROPIC_API_KEY in .env.
+Run scripts/02_ingest.py first, and set the Foundry variables in .env (see .env.example).
 """
 
 import argparse

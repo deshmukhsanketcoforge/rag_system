@@ -2,7 +2,7 @@
 
 An internal Q&A assistant over company policy documents, built from scratch.
 
-Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store), the Anthropic API (answer generation), `pytest`, and GitHub Actions CI.
+Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store), Claude on Azure AI Foundry (answer generation), `pytest`, and GitHub Actions CI.
 
 ## Status
 
@@ -22,14 +22,18 @@ This README grows as each step lands. The full plan is tracked in Linear (projec
 
 - Python 3.13 (for the local venv option)
 - Docker Desktop (for the container option)
-- An Anthropic API key. It is only needed to generate the documents and, later, to answer questions. The tests (except those marked `llm`) and the minimal loop run without it.
+- An Azure AI Foundry endpoint and key for a Claude deployment. They are only needed to generate the documents and to answer questions. The tests (except those marked `llm`) and the minimal loop run without it.
 
-## 1. Configure the API key
+## 1. Configure the LLM (Azure AI Foundry)
 
 ```bash
 cp .env.example .env
-# edit .env and set ANTHROPIC_API_KEY
+# edit .env: set ANTHROPIC_FOUNDRY_API_KEY and ANTHROPIC_FOUNDRY_BASE_URL
 ```
+
+`ANTHROPIC_FOUNDRY_BASE_URL` must be the Anthropic endpoint, `https://<resource>.services.ai.azure.com/anthropic`, not the project endpoint (`.../api/projects/...`), which fails with a missing `api-version` error.
+
+The model sent with each request is the Foundry deployment name, `claude-opus-5-5-fast` by default. Set `RAG_LLM_MODEL` in `.env` to use another deployment. All LLM calls go through `src/rag/llm.py`, which builds an `AnthropicFoundry` client and gives a one-line error if a setting is missing.
 
 `.env` is gitignored and excluded from the Docker image. Never commit it.
 
@@ -78,7 +82,7 @@ The vector store goes to `./chroma_db/` (gitignored). Set `RAG_CHROMA_PATH` to c
 
 One data quality issue is planted deliberately for a later diagnosis step. It is described in [docs/planted_issue.md](docs/planted_issue.md).
 
-The documents are committed, and CI never regenerates them. To regenerate (needs the API key):
+The documents are committed, and CI never regenerates them. To regenerate (needs the Foundry settings):
 
 ```bash
 python data/generate_docs.py             # all documents
@@ -159,9 +163,9 @@ Code: `src/rag/generate.py` (prompt and LLM call) and `src/rag/pipeline.py` (`an
 - **Prompt:** the chunks go to the LLM as numbered passages, each labelled with its document and section. The system prompt says to answer only from those passages, not to guess, and otherwise to reply with a fixed sentence ("I don't have enough information in the policy documents to answer that."). With nothing retrieved, the LLM is not called.
 - **Sources:** the distinct (document, section) pairs of the retrieved chunks, in rank order. When the answer is the fallback sentence, there are no sources, because nothing supports it. (Sources are the retrieved chunks, not a record of which ones the LLM actually used.)
 - **Prompt format:** passages sit inside `<context>` and the question inside `<question>`. Passage text is escaped, so a chunk cannot close the context or fake a question, and the system prompt says passage text is reference material, never instructions.
-- **Fail fast:** an empty question, `k < 1`, an unknown mode, a missing `ANTHROPIC_API_KEY` and an empty or missing vector store are all rejected before the embedding model loads. A response cut off at `max_tokens` raises instead of returning a partial answer. `ask.py` prints these as one-line `error: ...` messages.
+- **Fail fast:** an empty question, `k < 1`, an unknown mode, missing Foundry settings and an empty or missing vector store are all rejected before the embedding model loads. A response cut off at `max_tokens` raises instead of returning a partial answer. `ask.py` prints these as one-line `error: ...` messages.
 - **Response handling:** only `text` blocks are read, because responses can begin with a thinking block.
-- **No temperature setting:** `claude-sonnet-5-5` rejects the `temperature` parameter (HTTP 400), so answers can differ slightly between runs.
+- **No temperature setting:** both the direct Anthropic API and the Foundry deployment reject `temperature` (HTTP 400, checked live). It is not sent, so answers can differ slightly between runs.
 
 ## Tests
 
@@ -176,7 +180,8 @@ docker compose run --rm app        # container
 - `test_generate.py`: prompt contents and order, grounding instruction, fallback answer, text-block extraction, no temperature sent. Uses a fake LLM client.
 - `test_pipeline.py`: `answer` returns answer, chunks and sources; the LLM sees exactly the retrieved chunks; `k` and `mode` handling; empty question rejected. Fake embedder, fake LLM, temporary store.
 - `test_ask_script.py`: the output layout of `scripts/ask.py`.
-- `test_pipeline_llm.py`: two end-to-end tests with the real embedding model and the real LLM (a grounded answer, and the fallback for an unanswerable question). Marked `llm`: they are skipped when `ANTHROPIC_API_KEY` is not set, so `pytest` and CI work without a key.
+- `test_pipeline_llm.py`: two end-to-end tests with the real embedding model and the real LLM (a grounded answer, and the fallback for an unanswerable question). Marked `llm`: they are skipped when the Foundry settings are not set, so `pytest` and CI work without them.
+- `test_llm.py`: the client factory (settings validation, error messages, Foundry client and endpoint, whitespace trimmed). No network.
 - `test_retrieval_check.py`: the pass/fail logic of `scripts/03_check_retrieval.py` (right document and section first, required documents present).
 
 Retrieval recall and answer accuracy tests arrive with the evaluation ticket. To run only the offline tests: `pytest -m "not llm"`.
@@ -198,7 +203,7 @@ ruff format --check .   # what CI runs
 `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests targeting `main`:
 
 - `lint`: runs `ruff check .` and `ruff format --check .`. It is fast and does not install the heavy dependencies.
-- `test`: installs CPU-only PyTorch and the pinned requirements, then runs `pytest -v`. It passes the `ANTHROPIC_API_KEY` repository secret to the tests; without the secret the `llm` tests are skipped.
+- `test`: installs CPU-only PyTorch and the pinned requirements, then runs `pytest -v`. It passes the `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_BASE_URL` repository secrets to the tests; without them the `llm` tests are skipped.
 - `docker`: builds the image and runs `pytest -v` inside it.
 
 ## Configuration
@@ -209,7 +214,7 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 |---|---|
 | Embedding model | `all-MiniLM-L6-v2` |
 | Reranker model | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
-| LLM | `claude-sonnet-5-5` |
+| LLM | Foundry deployment `claude-opus-5-5-fast` (`RAG_LLM_MODEL` to override) |
 | Top-k retrieved chunks | 3 |
 | Vector store path | `./chroma_db`, or `RAG_CHROMA_PATH` if set (`/data/chroma_db` in the container) |
 
@@ -229,7 +234,7 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 │   ├── 02_ingest.py         # chunk + embed + store the corpus
 │   ├── 03_check_retrieval.py
 │   └── ask.py               # question -> answer CLI
-├── src/rag/                 # config, chunking, embeddings, store, generate, pipeline
+├── src/rag/                 # config, chunking, embeddings, store, llm, generate, pipeline
 └── tests/                   # smoke, chunking, store, generate, pipeline
 ```
 

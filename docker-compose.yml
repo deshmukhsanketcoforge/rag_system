@@ -2,7 +2,7 @@ services:
   app:
     build: .
     image: rag-system
-    # .env holds ANTHROPIC_API_KEY; optional so tests still run without it.
+    # .env holds the Foundry settings (ANTHROPIC_FOUNDRY_*); optional so tests still run without it.
     env_file:
       - path: .env
         required: false
