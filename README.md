@@ -17,7 +17,8 @@ Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store
 | Hybrid retrieval (keyword + vector, Reciprocal Rank Fusion) | Done |
 | Cross-encoder reranking | Done |
 | Evaluation harness (retrieval recall, answer accuracy) | Done |
-| Diagnosis, source attribution | Not started |
+| Diagnosis of the planted data quality issue | Done |
+| Source attribution | Not started |
 
 This README grows as each step lands. The full plan is tracked in Linear (project "RAG System").
 
@@ -83,7 +84,7 @@ The vector store goes to `./chroma_db/` (gitignored). Set `RAG_CHROMA_PATH` to c
 | `pto_policy.md` | Current paid time off policy |
 | `pto_policy_v1_2022.md` | Older PTO policy, kept in the corpus on purpose |
 
-One data quality issue is planted deliberately for a later diagnosis step. It is described in [docs/planted_issue.md](docs/planted_issue.md).
+One data quality issue is planted deliberately. It is described in [docs/planted_issue.md](docs/planted_issue.md) and diagnosed in [docs/diagnosis.md](docs/diagnosis.md).
 
 The documents are committed, and CI never regenerates them. To regenerate (needs the Foundry settings):
 
@@ -215,6 +216,22 @@ The fixed question set is `eval/test_set.json` (13 cases). Each case has a quest
 - **Thresholds:** pytest requires recall and accuracy of at least 0.8. That is a floor with room for one or two misses, not a target.
 - **Caveats:** 13 questions is a small set, and two of them (the mileage and EX-15 questions) were chosen because retrieval modes disagree on them, so the comparison flatters the later modes. The keyword check cannot see a hedged answer: for the PTO questions it passes when the answer says "20 days" even if it also mentions the outdated 15. RAG-9 looks at that.
 
+### Diagnosing the planted issue
+
+```bash
+python scripts/diagnose.py              # the full report (about 12 LLM calls)
+python scripts/diagnose.py --no-answers # retrieval and source evidence only, no LLM
+```
+
+The write-up is [docs/diagnosis.md](docs/diagnosis.md). In short: the corpus holds two PTO policies that contradict each other (20 vs 15 days, 5 vs 10 carryover days, and four more facts) with nothing saying which is current.
+
+- **Was it retrieval?** No. For both questions and all three modes the matching section of both policies is in the top 3, so retrieval returned what the corpus contains.
+- **Was it the source data?** Yes. The six conflicts are checked against the source text by a test, the stale document has no marker saying it is outdated, and chunk metadata has no version or date.
+- **Was it generation?** No. The system prompt says nothing about conflicts or versions (a test checks), and the model was handed both contradictory passages.
+- **Control test:** removing `pto_policy_v1_2022` (11 chunks, through the normal incremental sync) turns all 6 answers (2 questions x 3 modes) from "mixes both" into "correct", with no change to retrieval or generation code. The script verifies from the sync result that exactly the stale document's chunks were deleted.
+- **The eval harness did not catch it.** The RAG-8 keyword check scored the PTO cases as passing because the right value appears in the answer even when the outdated one does too. `rag.diagnosis.classify` is the stricter judge: correct, mixes both, outdated, or no answer.
+- **No cleanup needed.** The script builds its own temporary store, so `data/raw/` and your `chroma_db/` are never modified.
+
 ## Tests
 
 ```bash
@@ -231,6 +248,7 @@ docker compose run --rm app        # container
 - `test_retrieval.py`: tokenizing, keyword scoring (case, word-start matching, codes, phrases), RRF (scores, dedupe, ties), hybrid search on a temporary store with a fake embedder, and `test_hybrid_beats_vector`, which builds the real corpus with the real embedding model (a few seconds; skipped if the model cannot be downloaded) and checks that hybrid finds chunks vector search ranks low.
 - `test_evaluation.py`, `test_eval_set.py`, `test_run_eval.py`: the harness logic (matching, scoring, loading, report), a check that every expectation in `eval/test_set.json` exists in the corpus (offline), and the runner with fakes.
 - `test_retrieval.py` also holds the recall tests on the eval set (real corpus and models, no LLM), and `test_answers.py` the accuracy tests (marked `llm`, skipped without the Foundry settings).
+- `test_diagnosis.py`, `test_diagnose_script.py`: the six planted conflicts checked against the source, the verdict judge, no status marker in the stale document, retrieval returning both policies in every mode, the control store, and (marked `llm`) the control answers being correct while the full-corpus answers are not. The runner is tested with fakes.
 - `test_rerank.py`: reranking with a fake scorer (order, top-k, ties, no input mutation, empty input, wrong score count) and `test_rerank_beats_hybrid`, which uses the real corpus and the real cross-encoder (skipped if a model cannot be downloaded) and checks that the answer chunk moves up.
 - `test_pipeline_llm.py`: two end-to-end tests with the real embedding model and the real LLM (a grounded answer, and the fallback for an unanswerable question). Marked `llm`: they are skipped when the Foundry settings are not set, so `pytest` and CI work without them.
 - `test_llm.py`: the client factory (settings validation, error messages, Foundry client and endpoint, whitespace trimmed). No network.
@@ -283,14 +301,16 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 │   ├── raw/                 # generated policy documents
 │   └── generate_docs.py     # LLM document generator
 ├── docs/planted_issue.md    # the planted data quality issue
+├── docs/diagnosis.md        # RAG-9: retrieval or source data? (with the control test)
 ├── eval/                    # test_set.json (the question set), results.md (saved runs)
 ├── scripts/
 │   ├── 01_minimal_loop.py   # two-text proof
 │   ├── 02_ingest.py         # chunk + embed + store the corpus
 │   ├── 03_check_retrieval.py
 │   ├── ask.py               # question -> answer CLI
-│   └── run_eval.py          # evaluation harness runner
-├── src/rag/                 # config, chunking, embeddings, store, retrieval, rerank, evaluation, llm, generate, pipeline
+│   ├── run_eval.py          # evaluation harness runner
+│   └── diagnose.py          # two-question diagnosis + control test
+├── src/rag/                 # config, chunking, embeddings, store, retrieval, rerank, evaluation, diagnosis, llm, generate, pipeline
 └── tests/                   # smoke, chunking, store, retrieval, rerank, evaluation, generate, pipeline
 ```
 
