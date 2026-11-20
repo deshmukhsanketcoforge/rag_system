@@ -20,7 +20,49 @@ Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store
 | Diagnosis of the planted data quality issue | Done |
 | Source attribution (cited passages, validated) | Done |
 
-This README grows as each step lands. The full plan is tracked in Linear (project "RAG System").
+Every step is done. The plan was tracked in Linear (project "RAG System"). The written diagnosis of the planted data issue is [docs/diagnosis.md](docs/diagnosis.md).
+
+## Quick start
+
+With Docker (recommended), after the one-time setup in sections 1 and 2 below:
+
+```bash
+docker compose run --rm app python scripts/02_ingest.py          # chunk, embed and store the corpus
+docker compose run --rm app python scripts/ask.py "What is the mileage rate for my own car?" --mode rerank
+docker compose run --rm app python scripts/run_eval.py --answers # recall and accuracy, three modes
+docker compose run --rm app python scripts/diagnose.py           # the planted-issue diagnosis
+docker compose run --rm app pytest -v                            # the whole test suite
+```
+
+Or with a local virtual environment:
+
+```bash
+python3.13 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python scripts/02_ingest.py
+python scripts/ask.py "What is the mileage rate for my own car?" --mode rerank
+python scripts/run_eval.py --answers
+python scripts/diagnose.py
+pytest -v
+```
+
+`ask.py` takes `--mode vector|hybrid|rerank` and `-k N`. `ask.py`, `run_eval.py --answers` and `diagnose.py` call the LLM, so they need the Foundry settings in `.env` (section 1). Everything else, including most of the tests, runs without it.
+
+## Results at a glance
+
+Evaluation: 13 questions (`eval/test_set.json`), top 3 chunks, answers from `claude-opus-5-5-fast`. Per-question tables are in `eval/results.md`.
+
+| mode | recall@3 | answer accuracy |
+|---|---|---|
+| vector | 92% | 92% |
+| hybrid | 92% | 92% |
+| rerank | 100% | 100% |
+
+- **Hybrid beats vector-only** on exact-code questions: for "Who signs EX-15?" the answer chunk is ranked 5th by vector search (outside the top 3) and 1st by hybrid. For "What is Form PTO-1?" it goes from 18th to 3rd.
+- **Reranking beats hybrid** when the question shares no words with the answer: for "What is the mileage rate for my own car?" the answer chunk ("$0.67 per mile") goes from 8th to 1st.
+- **The planted data issue is caused by the source data, not by retrieval.** Two PTO policies contradict each other and nothing says which is current. Retrieval returned both, and removing the outdated one turned all 6 test answers correct with no code change. See [docs/diagnosis.md](docs/diagnosis.md).
+- **Sources are cited and validated.** Answers cite the passages they used, and a citation to a passage that was not retrieved can never become a source.
+- **Caveats:** 13 questions is a small set, and two of them (the mileage and EX-15 questions) were picked because the modes disagree, so the later modes look better than a neutral set would show. The keyword accuracy check cannot see an answer that also quotes the outdated value, which is why it scored the planted PTO questions as passing; the diagnosis uses a stricter judge.
 
 ## Prerequisites
 
@@ -70,7 +112,7 @@ python scripts/01_minimal_loop.py
 
 The vector store goes to `./chroma_db/` (gitignored). Set `RAG_CHROMA_PATH` to change that.
 
-## What exists so far
+## What was built
 
 ### Source documents
 
@@ -269,7 +311,9 @@ docker compose run --rm app        # container
 - `test_llm.py`: the client factory (settings validation, error messages, Foundry client and endpoint, whitespace trimmed). No network.
 - `test_retrieval_check.py`: the pass/fail logic of `scripts/03_check_retrieval.py` (right document and section first, required documents present).
 
-Retrieval recall and answer accuracy tests arrive with the evaluation ticket. To run only the offline tests: `pytest -m "not llm"`.
+- `test_ci_config.py`, `test_conftest_policy.py`, `test_readme.py`: the CI workflow (jobs, read-only token, timeouts, secrets used by the `test` job only, torch pinned the same in CI and the Dockerfile, model failures fail the run), the skip-or-fail policy, and this README (sections present, links and paths exist, results table matches `eval/results.md`).
+
+`pytest -m "not llm"` skips the live LLM tests. The real-corpus tests (recall, rerank, diagnosis) load the embedding model and the cross-encoder, which are downloaded on first use and cached.
 
 ## Lint and formatting
 
@@ -288,8 +332,12 @@ ruff format --check .   # what CI runs
 `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests targeting `main`:
 
 - `lint`: runs `ruff check .` and `ruff format --check .`. It is fast and does not install the heavy dependencies.
-- `test`: restores the cached Hugging Face models, installs CPU-only PyTorch and the pinned requirements, then runs `pytest -v`. It passes the `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_BASE_URL` repository secrets to the tests; without them the `llm` tests are skipped.
-- `docker`: builds the image and runs `pytest -v` inside it.
+- `test`: restores the cached Hugging Face models, installs CPU-only PyTorch (pinned to `2.15.0`) and the pinned requirements, then runs the whole suite with `pytest -v -rs`. That includes the chunking, retrieval-recall, hybrid, rerank, attribution and evaluation-harness tests.
+- `docker`: builds the image and runs the whole suite inside it, with no secrets.
+
+**LLM tests in CI.** The answer-accuracy, attribution and diagnosis tests that call the model are marked `llm`. The `test` job passes the `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_BASE_URL` repository secrets, so on this repository they run for real. They are skipped, not failed, when the secrets are missing (a pull request from a fork, or a repository without them), and `-rs` prints each skip with its reason. The `docker` job has no secrets, so the `llm` tests are skipped there. The recall tests, the harness logic and the other offline tests need no secrets and always run.
+
+**A skipped test never hides a failed download.** The recall and eval tests load two models from Hugging Face. CI sets `RAG_REQUIRE_MODELS=1`, so if a model cannot be downloaded the run fails instead of skipping those tests; without the variable (a local run offline) they skip. The workflow token is read-only, every job has a timeout, and only the `test` job sees the secrets.
 
 ## Configuration
 
@@ -326,7 +374,5 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 │   ├── run_eval.py          # evaluation harness runner
 │   └── diagnose.py          # two-question diagnosis + control test
 ├── src/rag/                 # config, chunking, embeddings, store, retrieval, rerank, attribution, evaluation, diagnosis, llm, generate, pipeline
-└── tests/                   # smoke, chunking, store, retrieval, rerank, evaluation, generate, pipeline
+└── tests/                   # one test file per module (see Tests)
 ```
-
-Empty directories `eval/` and `docs/screenshots/` are placeholders for later steps.
