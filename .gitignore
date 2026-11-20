@@ -224,3 +224,6 @@ __marimo__/
 
 # Local vector store
 chroma_db/
+
+# Local traces of sample runs (docs/outputs/NN_name.txt); evidence is kept in the report
+docs/outputs/

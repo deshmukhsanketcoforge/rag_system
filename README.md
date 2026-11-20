@@ -13,7 +13,8 @@ Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store
 | Minimal embed-store-retrieve loop | Done |
 | Container (Dockerfile, docker-compose) | Done |
 | Chunking, embedding and persistent vector store at full scale | Done |
-| RAG pipeline, hybrid search, reranking, eval harness, diagnosis, source attribution | Not started |
+| Basic RAG pipeline (vector-only retrieval + LLM answer) | Done |
+| Hybrid search, reranking, eval harness, diagnosis, source attribution | Not started |
 
 This README grows as each step lands. The full plan is tracked in Linear (project "RAG System").
 
@@ -21,7 +22,7 @@ This README grows as each step lands. The full plan is tracked in Linear (projec
 
 - Python 3.13 (for the local venv option)
 - Docker Desktop (for the container option)
-- An Anthropic API key. It is only needed to generate the documents and, later, to answer questions. The tests and the minimal loop run without it.
+- An Anthropic API key. It is only needed to generate the documents and, later, to answer questions. The tests (except those marked `llm`) and the minimal loop run without it.
 
 ## 1. Configure the API key
 
@@ -140,6 +141,28 @@ Code: `src/rag/chunking.py`, `embeddings.py`, `store.py`. All five documents are
 
 Result: 50 chunks (expense 10, PTO 10, PTO v1 11, remote work 9, security 10).
 
+### Basic RAG pipeline
+
+```bash
+python scripts/02_ingest.py                                    # once, to fill the vector store
+python scripts/ask.py "How much is the home office equipment stipend?"
+python scripts/ask.py "How soon must I submit an expense report?" -k 5
+# in the container:
+docker compose run --rm app python scripts/ask.py "How much is the home office equipment stipend?"
+```
+
+The script prints the question, the retrieved chunks with their distances, the answer and the sources.
+
+Code: `src/rag/generate.py` (prompt and LLM call) and `src/rag/pipeline.py` (`answer(question) -> {answer, chunks, sources}`).
+
+- **Retrieval:** the question is embedded and the top `TOP_K` (3) chunks are fetched by cosine distance. `pipeline.answer(..., mode="vector")` is the switch that hybrid search and reranking will extend, so this first version can still be reproduced later.
+- **Prompt:** the chunks go to the LLM as numbered passages, each labelled with its document and section. The system prompt says to answer only from those passages, not to guess, and otherwise to reply with a fixed sentence ("I don't have enough information in the policy documents to answer that."). With nothing retrieved, the LLM is not called.
+- **Sources:** the distinct (document, section) pairs of the retrieved chunks, in rank order. When the answer is the fallback sentence, there are no sources, because nothing supports it. (Sources are the retrieved chunks, not a record of which ones the LLM actually used.)
+- **Prompt format:** passages sit inside `<context>` and the question inside `<question>`. Passage text is escaped, so a chunk cannot close the context or fake a question, and the system prompt says passage text is reference material, never instructions.
+- **Fail fast:** an empty question, `k < 1`, an unknown mode, a missing `ANTHROPIC_API_KEY` and an empty or missing vector store are all rejected before the embedding model loads. A response cut off at `max_tokens` raises instead of returning a partial answer. `ask.py` prints these as one-line `error: ...` messages.
+- **Response handling:** only `text` blocks are read, because responses can begin with a thinking block.
+- **No temperature setting:** `claude-sonnet-5-5` rejects the `temperature` parameter (HTTP 400), so answers can differ slightly between runs.
+
 ## Tests
 
 ```bash
@@ -150,9 +173,13 @@ docker compose run --rm app        # container
 - `test_smoke.py`: imports and config values.
 - `test_chunking.py`: size cap, subsection splitting, overlap, metadata, header chunk (capped too), code fences, titles, UTF-8, deterministic IDs.
 - `test_store.py`: incremental sync (first ingest, no-op re-run embeds nothing, only the changed chunk is re-embedded, new chunks added, removed chunks deleted, failed embedding loses nothing, wrong distance space rejected, fingerprint change and `--rebuild` re-embed all) and nearest-first query. Uses a fake embedder, so no model download is needed.
+- `test_generate.py`: prompt contents and order, grounding instruction, fallback answer, text-block extraction, no temperature sent. Uses a fake LLM client.
+- `test_pipeline.py`: `answer` returns answer, chunks and sources; the LLM sees exactly the retrieved chunks; `k` and `mode` handling; empty question rejected. Fake embedder, fake LLM, temporary store.
+- `test_ask_script.py`: the output layout of `scripts/ask.py`.
+- `test_pipeline_llm.py`: two end-to-end tests with the real embedding model and the real LLM (a grounded answer, and the fallback for an unanswerable question). Marked `llm`: they are skipped when `ANTHROPIC_API_KEY` is not set, so `pytest` and CI work without a key.
 - `test_retrieval_check.py`: the pass/fail logic of `scripts/03_check_retrieval.py` (right document and section first, required documents present).
 
-Retrieval recall and answer accuracy tests arrive with the evaluation ticket.
+Retrieval recall and answer accuracy tests arrive with the evaluation ticket. To run only the offline tests: `pytest -m "not llm"`.
 
 ## Lint and formatting
 
@@ -171,7 +198,7 @@ ruff format --check .   # what CI runs
 `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests targeting `main`:
 
 - `lint`: runs `ruff check .` and `ruff format --check .`. It is fast and does not install the heavy dependencies.
-- `test`: installs CPU-only PyTorch and the pinned requirements, then runs `pytest -v`.
+- `test`: installs CPU-only PyTorch and the pinned requirements, then runs `pytest -v`. It passes the `ANTHROPIC_API_KEY` repository secret to the tests; without the secret the `llm` tests are skipped.
 - `docker`: builds the image and runs `pytest -v` inside it.
 
 ## Configuration
@@ -183,6 +210,7 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 | Embedding model | `all-MiniLM-L6-v2` |
 | Reranker model | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | LLM | `claude-sonnet-5-5` |
+| Top-k retrieved chunks | 3 |
 | Vector store path | `./chroma_db`, or `RAG_CHROMA_PATH` if set (`/data/chroma_db` in the container) |
 
 ## Repo layout
@@ -199,9 +227,10 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 ├── scripts/
 │   ├── 01_minimal_loop.py   # two-text proof
 │   ├── 02_ingest.py         # chunk + embed + store the corpus
-│   └── 03_check_retrieval.py
-├── src/rag/                 # config, chunking, embeddings, store
-└── tests/                   # smoke, chunking, store
+│   ├── 03_check_retrieval.py
+│   └── ask.py               # question -> answer CLI
+├── src/rag/                 # config, chunking, embeddings, store, generate, pipeline
+└── tests/                   # smoke, chunking, store, generate, pipeline
 ```
 
 Empty directories `eval/` and `docs/screenshots/` are placeholders for later steps.
