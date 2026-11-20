@@ -43,3 +43,12 @@ TOP_K = 3
 MAX_ANSWER_TOKENS = 2000
 # Both the direct API and the Foundry deployment reject `temperature` (HTTP 400, checked live), so
 # it is not sent and answers may vary slightly from run to run.
+
+# --- Hybrid retrieval (RAG-6) ---
+# Reciprocal Rank Fusion adds 1 / (RRF_K + rank) per list a chunk appears in. 60 is the value from
+# the original paper: large enough that rank 1 and rank 5 are not wildly different, so a chunk
+# near the top of both lists beats one at the very top of only one.
+RRF_K = 60
+# How many candidates each search (vector, keyword) hands to the fusion step. The corpus is 50
+# chunks; 10 is generous and keeps the fused list from being padded with weak keyword matches.
+CANDIDATE_POOL = 10

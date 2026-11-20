@@ -1,7 +1,7 @@
-"""Question in, grounded answer out (RAG-5). Retrieval is vector-only for now.
+"""Question in, grounded answer out (RAG-5), with switchable retrieval.
 
-`mode` is the switch later tickets extend: "vector" today, then hybrid and hybrid + rerank, so
-the first pipeline can still be reproduced at the end.
+`mode` picks the retrieval: "vector" (RAG-5), "hybrid" = vector + keyword merged with RRF (RAG-6).
+RAG-7 adds reranking. Keeping every mode means the first pipeline can still be reproduced.
 """
 
 from collections.abc import Callable
@@ -10,11 +10,11 @@ from chromadb.errors import NotFoundError
 from dotenv import load_dotenv
 
 from rag import generate as gen
-from rag import store
+from rag import retrieval, store
 from rag.config import ROOT, TOP_K
 from rag.llm import require_settings
 
-MODES = ("vector",)
+MODES = ("vector", "hybrid")
 
 load_dotenv(ROOT / ".env")  # once, at import; real environment variables still win
 
@@ -24,6 +24,8 @@ def retrieve(
 ) -> list[dict]:
     if mode not in MODES:
         raise ValueError(f"unknown mode '{mode}', expected one of {MODES}")
+    if mode == "hybrid":
+        return retrieval.hybrid_search(question, collection, embedder, k=k)
     return store.query(collection, embedder([question])[0], k=k)
 
 

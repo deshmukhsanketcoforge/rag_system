@@ -31,8 +31,10 @@ def format_result(question: str, result: dict, mode: str) -> str:
     lines = [f"Question: {question}", f"Retrieval: {mode}", "", "Retrieved chunks:"]
     for rank, chunk in enumerate(result["chunks"], start=1):
         meta = chunk["metadata"]
+        distance = "-" if chunk.get("distance") is None else f"{chunk['distance']:.4f}"
+        score = f"  score={chunk['score']:.4f}" if "score" in chunk else ""
         lines.append(
-            f"  [{rank}] distance={chunk['distance']:.4f}  {meta['doc_name']} > {meta['section']}"
+            f"  [{rank}] distance={distance}{score}  {meta['doc_name']} > {meta['section']}"
         )
         lines.append(textwrap.indent(textwrap.fill(chunk["text"], 96), "      "))
     lines += ["", "Answer:", _wrap_answer(result["answer"]), "", "Sources:"]
