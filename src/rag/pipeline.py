@@ -1,7 +1,8 @@
 """Question in, grounded answer out (RAG-5), with switchable retrieval.
 
-`mode` picks the retrieval: "vector" (RAG-5), "hybrid" = vector + keyword merged with RRF (RAG-6).
-RAG-7 adds reranking. Keeping every mode means the first pipeline can still be reproduced.
+`mode` picks the retrieval: "vector" (RAG-5), "hybrid" = vector + keyword merged with RRF (RAG-6),
+"rerank" = hybrid candidates re-scored by a cross-encoder (RAG-7). Keeping every mode means the
+first pipeline can still be reproduced, and the eval can compare them.
 """
 
 from collections.abc import Callable
@@ -10,20 +11,31 @@ from chromadb.errors import NotFoundError
 from dotenv import load_dotenv
 
 from rag import generate as gen
+from rag import rerank as rr
 from rag import retrieval, store
-from rag.config import ROOT, TOP_K
+from rag.config import RERANK_CANDIDATES, ROOT, TOP_K
 from rag.llm import require_settings
 
-MODES = ("vector", "hybrid")
+MODES = ("vector", "hybrid", "rerank")
 
 load_dotenv(ROOT / ".env")  # once, at import; real environment variables still win
 
 
 def retrieve(
-    question: str, collection, embedder: Callable, k: int = TOP_K, mode: str = "vector"
+    question: str,
+    collection,
+    embedder: Callable,
+    k: int = TOP_K,
+    mode: str = "vector",
+    reranker: Callable | None = None,
 ) -> list[dict]:
     if mode not in MODES:
         raise ValueError(f"unknown mode '{mode}', expected one of {MODES}")
+    if mode == "rerank":
+        candidates = retrieval.hybrid_search(
+            question, collection, embedder, k=max(RERANK_CANDIDATES, k)
+        )
+        return rr.rerank(question, candidates, k=k, scorer=reranker)
     if mode == "hybrid":
         return retrieval.hybrid_search(question, collection, embedder, k=k)
     return store.query(collection, embedder([question])[0], k=k)
@@ -60,6 +72,7 @@ def answer(
     collection=None,
     embedder: Callable | None = None,
     llm=None,
+    reranker: Callable | None = None,
 ) -> dict:
     """Retrieve, generate, and return {answer, chunks, sources}.
 
@@ -74,12 +87,16 @@ def answer(
         raise ValueError(f"k must be at least 1, got {k}")
     if mode not in MODES:
         raise ValueError(f"unknown mode '{mode}', expected one of {MODES}")
+    if reranker is not None and mode != "rerank":
+        raise ValueError(f"a reranker only applies to mode 'rerank', not '{mode}'")
     if llm is None:
         require_settings()
     collection = _require_ingested(collection)
+    if mode == "rerank" and reranker is None:
+        reranker = rr.load_scorer()  # fail fast, before the embedding model or the search
     if embedder is None:
         from rag.embeddings import embed as embedder
-    chunks = retrieve(question, collection, embedder, k=k, mode=mode)
+    chunks = retrieve(question, collection, embedder, k=k, mode=mode, reranker=reranker)
     text = gen.generate(question, chunks, client=llm)
     return {
         "answer": text,

@@ -33,6 +33,8 @@ def format_result(question: str, result: dict, mode: str) -> str:
         meta = chunk["metadata"]
         distance = "-" if chunk.get("distance") is None else f"{chunk['distance']:.4f}"
         score = f"  score={chunk['score']:.4f}" if "score" in chunk else ""
+        if "rerank_score" in chunk:
+            score += f"  rerank={chunk['rerank_score']:.4f}"
         lines.append(
             f"  [{rank}] distance={distance}{score}  {meta['doc_name']} > {meta['section']}"
         )

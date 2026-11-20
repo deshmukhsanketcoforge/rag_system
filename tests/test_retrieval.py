@@ -203,21 +203,7 @@ def test_k_above_the_pool_still_returns_k_chunks(collection):
 
 
 # --- vector vs hybrid on the real corpus and the real embedding model (screenshot #5) ---
-
-
-@pytest.fixture(scope="module")
-def real_collection(tmp_path_factory):
-    """The real corpus, chunked and embedded into a temp store (50 chunks, a few seconds)."""
-    from rag.chunking import chunk_corpus
-    from rag.config import INGEST_FINGERPRINT, RAW_DIR
-    from rag.embeddings import embed
-
-    client = chromadb.PersistentClient(path=str(tmp_path_factory.mktemp("real_store")))
-    try:
-        collection, _ = store.sync(chunk_corpus(RAW_DIR), embed, INGEST_FINGERPRINT, client=client)
-    except OSError as exc:  # the embedding model is not cached and there is no network
-        pytest.skip(f"embedding model unavailable: {exc}")
-    return collection, embed
+# The `real_collection` fixture lives in tests/conftest.py (shared with test_rerank.py).
 
 
 def _rank_of(hits, needle):

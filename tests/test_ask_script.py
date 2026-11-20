@@ -95,3 +95,9 @@ def test_hybrid_chunks_show_their_fused_score_and_a_dash_when_there_is_no_distan
 
 def test_the_mode_flag_offers_hybrid():
     assert "hybrid" in ask.pipeline.MODES
+
+
+def test_reranked_chunks_show_the_rerank_score():
+    chunks = [{**RESULT["chunks"][0], "score": 0.0328, "rerank_score": 7.25}]
+    out = ask.format_result("Q?", {**RESULT, "chunks": chunks}, "rerank")
+    assert "rerank=7.2500" in out

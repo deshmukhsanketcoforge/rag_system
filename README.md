@@ -15,7 +15,8 @@ Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store
 | Chunking, embedding and persistent vector store at full scale | Done |
 | Basic RAG pipeline (vector-only retrieval + LLM answer) | Done |
 | Hybrid retrieval (keyword + vector, Reciprocal Rank Fusion) | Done |
-| Reranking, eval harness, diagnosis, source attribution | Not started |
+| Cross-encoder reranking | Done |
+| Eval harness, diagnosis, source attribution | Not started |
 
 This README grows as each step lands. The full plan is tracked in Linear (project "RAG System").
 
@@ -182,6 +183,19 @@ Code: `src/rag/retrieval.py`. Vector search finds chunks that mean the same as t
 - **Where it wins:** the question "Who signs EX-15?" ranks the answer chunk 5th by vector search and 1st by hybrid; "What is Form PTO-1?" ranks it 18th and 3rd. `pytest -s tests/test_retrieval.py -k beats` prints the comparison.
 - **Limits:** keyword search needs every question word spelled as in the document, and it has no stemming beyond the word-start rule. It adds nothing to a question that is all meaning and no exact tokens, which is why vector search stays in the mix.
 
+### Reranking
+
+```bash
+python scripts/ask.py "What is the mileage rate for my own car?" --mode rerank
+```
+
+Code: `src/rag/rerank.py`. Vector and keyword search score the question and each chunk separately. A cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`) reads the question and one chunk together and gives one relevance score, which is more accurate but too slow to run on everything. `mode="rerank"` therefore takes the top `RERANK_CANDIDATES` (20) chunks from hybrid search, re-scores each (question, chunk) pair, and keeps the best `k`.
+
+- **Output:** reranked chunks keep their hybrid `score` and `distance` and add `rerank_score` (shown as `rerank=` by `ask.py`). Ties keep the hybrid order.
+- **Where it wins:** "What is the mileage rate for my own car?" shares no word with "$0.67 per mile". Hybrid ranks that chunk 8th among its candidates and the cross-encoder ranks it 1st. "When do I get paid back after claiming?" goes from 2nd to 1st. `pytest -s tests/test_rerank.py -k beats_hybrid` prints both orderings.
+- **Not always better:** reranking is not a free win. On "How many paid holidays does the company have?" the answer chunk moves from 1st to 2nd. The eval harness is where the three modes get compared on one question set.
+- **The flag:** the three modes (`vector`, `hybrid`, `rerank`) are the with/without switch, so the eval can compare them and the first pipeline can still be reproduced.
+
 ## Tests
 
 ```bash
@@ -196,6 +210,7 @@ docker compose run --rm app        # container
 - `test_pipeline.py`: `answer` returns answer, chunks and sources; the LLM sees exactly the retrieved chunks; `k` and `mode` handling; empty question rejected. Fake embedder, fake LLM, temporary store.
 - `test_ask_script.py`: the output layout of `scripts/ask.py`.
 - `test_retrieval.py`: tokenizing, keyword scoring (case, word-start matching, codes, phrases), RRF (scores, dedupe, ties), hybrid search on a temporary store with a fake embedder, and `test_hybrid_beats_vector`, which builds the real corpus with the real embedding model (a few seconds; skipped if the model cannot be downloaded) and checks that hybrid finds chunks vector search ranks low.
+- `test_rerank.py`: reranking with a fake scorer (order, top-k, ties, no input mutation, empty input, wrong score count) and `test_rerank_beats_hybrid`, which uses the real corpus and the real cross-encoder (skipped if a model cannot be downloaded) and checks that the answer chunk moves up.
 - `test_pipeline_llm.py`: two end-to-end tests with the real embedding model and the real LLM (a grounded answer, and the fallback for an unanswerable question). Marked `llm`: they are skipped when the Foundry settings are not set, so `pytest` and CI work without them.
 - `test_llm.py`: the client factory (settings validation, error messages, Foundry client and endpoint, whitespace trimmed). No network.
 - `test_retrieval_check.py`: the pass/fail logic of `scripts/03_check_retrieval.py` (right document and section first, required documents present).
@@ -233,6 +248,7 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 | LLM | Foundry deployment `claude-opus-5-5-fast` (`RAG_LLM_MODEL` to override) |
 | Top-k retrieved chunks | 3 |
 | RRF constant, candidates per search | 60, 10 |
+| Candidates sent to the reranker | 20 |
 | Vector store path | `./chroma_db`, or `RAG_CHROMA_PATH` if set (`/data/chroma_db` in the container) |
 
 ## Repo layout
@@ -251,8 +267,8 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 │   ├── 02_ingest.py         # chunk + embed + store the corpus
 │   ├── 03_check_retrieval.py
 │   └── ask.py               # question -> answer CLI
-├── src/rag/                 # config, chunking, embeddings, store, retrieval, llm, generate, pipeline
-└── tests/                   # smoke, chunking, store, retrieval, generate, pipeline
+├── src/rag/                 # config, chunking, embeddings, store, retrieval, rerank, llm, generate, pipeline
+└── tests/                   # smoke, chunking, store, retrieval, rerank, generate, pipeline
 ```
 
 Empty directories `eval/` and `docs/screenshots/` are placeholders for later steps.
