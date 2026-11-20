@@ -157,3 +157,20 @@ def test_question_is_stripped_before_embedding_and_prompting(collection):
     pipeline.answer("  text 0\n", collection=collection, embedder=embedder, llm=llm)
     assert seen == ["text 0"]
     assert "<question>text 0</question>" in llm.prompts[0]
+
+
+# --- hybrid mode (RAG-6) ---
+
+
+def test_hybrid_is_a_known_mode():
+    assert "hybrid" in pipeline.MODES
+
+
+def test_hybrid_mode_adds_the_keyword_hit_vector_search_missed(collection):
+    # The query "3" embeds to [0, 1, 0], so vector search puts "text 1" first and never reaches
+    # "text 3". The keyword search matches the digit and hybrid brings that chunk in.
+    vector = _answer("3", collection, k=1, mode="vector", llm=RecordingLLM())
+    assert vector["chunks"][0]["id"] == "a::1"
+    out = _answer("3", collection, k=2, mode="hybrid", llm=RecordingLLM())
+    assert "b::1" in [c["id"] for c in out["chunks"]]
+    assert all("score" in c for c in out["chunks"])

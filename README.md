@@ -14,7 +14,8 @@ Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store
 | Container (Dockerfile, docker-compose) | Done |
 | Chunking, embedding and persistent vector store at full scale | Done |
 | Basic RAG pipeline (vector-only retrieval + LLM answer) | Done |
-| Hybrid search, reranking, eval harness, diagnosis, source attribution | Not started |
+| Hybrid retrieval (keyword + vector, Reciprocal Rank Fusion) | Done |
+| Reranking, eval harness, diagnosis, source attribution | Not started |
 
 This README grows as each step lands. The full plan is tracked in Linear (project "RAG System").
 
@@ -159,13 +160,27 @@ The script prints the question, the retrieved chunks with their distances, the a
 
 Code: `src/rag/generate.py` (prompt and LLM call) and `src/rag/pipeline.py` (`answer(question) -> {answer, chunks, sources}`).
 
-- **Retrieval:** the question is embedded and the top `TOP_K` (3) chunks are fetched by cosine distance. `pipeline.answer(..., mode="vector")` is the switch that hybrid search and reranking will extend, so this first version can still be reproduced later.
+- **Retrieval:** the question is embedded and the top `TOP_K` (3) chunks are fetched by cosine distance. `pipeline.answer(..., mode="vector")` is the switch: `"hybrid"` (below) is the second mode and reranking will be the third, so this first version can still be reproduced.
 - **Prompt:** the chunks go to the LLM as numbered passages, each labelled with its document and section. The system prompt says to answer only from those passages, not to guess, and otherwise to reply with a fixed sentence ("I don't have enough information in the policy documents to answer that."). With nothing retrieved, the LLM is not called.
 - **Sources:** the distinct (document, section) pairs of the retrieved chunks, in rank order. When the answer is the fallback sentence, there are no sources, because nothing supports it. (Sources are the retrieved chunks, not a record of which ones the LLM actually used.)
 - **Prompt format:** passages sit inside `<context>` and the question inside `<question>`. Passage text is escaped, so a chunk cannot close the context or fake a question, and the system prompt says passage text is reference material, never instructions.
 - **Fail fast:** an empty question, `k < 1`, an unknown mode, missing Foundry settings and an empty or missing vector store are all rejected before the embedding model loads. A response cut off at `max_tokens` raises instead of returning a partial answer. `ask.py` prints these as one-line `error: ...` messages.
 - **Response handling:** only `text` blocks are read, because responses can begin with a thinking block.
 - **No temperature setting:** both the direct Anthropic API and the Foundry deployment reject `temperature` (HTTP 400, checked live). It is not sent, so answers can differ slightly between runs.
+
+### Hybrid retrieval
+
+```bash
+python scripts/ask.py "Who signs EX-15?" --mode hybrid
+```
+
+Code: `src/rag/retrieval.py`. Vector search finds chunks that mean the same as the question, but can bury a chunk when the question hinges on an exact token such as a form code (EX-15) or a section number (7.3). Keyword search is the opposite. `mode="hybrid"` runs both and merges the two ranked lists with Reciprocal Rank Fusion.
+
+- **Keyword search:** tokens are lowercased and stopwords dropped. Each question token found in a chunk scores 1, a code token (`EX-14`, `7.3`) scores 3, and each pair of neighbouring tokens found together in the chunk scores 2 more. A token matches from the start of a word, so `reimburse` finds `reimbursed` but `pto` is not found in `laptop`, and `EX-14` does not match `EX-145`.
+- **RRF:** a chunk scores the sum of `1 / (60 + rank)` over each list that holds it, so a chunk near the top of both lists beats one at the very top of only one. Each search contributes its top `CANDIDATE_POOL` (10) chunks, duplicates are merged by chunk ID, and the top `k` are returned. Ties go to the vector hit.
+- **Output:** hybrid chunks carry `score` (the fused score) as well as `distance` (the cosine distance, `-` for a chunk only the keyword search found).
+- **Where it wins:** the question "Who signs EX-15?" ranks the answer chunk 5th by vector search and 1st by hybrid; "What is Form PTO-1?" ranks it 18th and 3rd. `pytest -s tests/test_retrieval.py -k beats` prints the comparison.
+- **Limits:** keyword search needs every question word spelled as in the document, and it has no stemming beyond the word-start rule. It adds nothing to a question that is all meaning and no exact tokens, which is why vector search stays in the mix.
 
 ## Tests
 
@@ -180,6 +195,7 @@ docker compose run --rm app        # container
 - `test_generate.py`: prompt contents and order, grounding instruction, fallback answer, text-block extraction, no temperature sent. Uses a fake LLM client.
 - `test_pipeline.py`: `answer` returns answer, chunks and sources; the LLM sees exactly the retrieved chunks; `k` and `mode` handling; empty question rejected. Fake embedder, fake LLM, temporary store.
 - `test_ask_script.py`: the output layout of `scripts/ask.py`.
+- `test_retrieval.py`: tokenizing, keyword scoring (case, word-start matching, codes, phrases), RRF (scores, dedupe, ties), hybrid search on a temporary store with a fake embedder, and `test_hybrid_beats_vector`, which builds the real corpus with the real embedding model (a few seconds; skipped if the model cannot be downloaded) and checks that hybrid finds chunks vector search ranks low.
 - `test_pipeline_llm.py`: two end-to-end tests with the real embedding model and the real LLM (a grounded answer, and the fallback for an unanswerable question). Marked `llm`: they are skipped when the Foundry settings are not set, so `pytest` and CI work without them.
 - `test_llm.py`: the client factory (settings validation, error messages, Foundry client and endpoint, whitespace trimmed). No network.
 - `test_retrieval_check.py`: the pass/fail logic of `scripts/03_check_retrieval.py` (right document and section first, required documents present).
@@ -216,6 +232,7 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 | Reranker model | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
 | LLM | Foundry deployment `claude-opus-5-5-fast` (`RAG_LLM_MODEL` to override) |
 | Top-k retrieved chunks | 3 |
+| RRF constant, candidates per search | 60, 10 |
 | Vector store path | `./chroma_db`, or `RAG_CHROMA_PATH` if set (`/data/chroma_db` in the container) |
 
 ## Repo layout
@@ -234,8 +251,8 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 │   ├── 02_ingest.py         # chunk + embed + store the corpus
 │   ├── 03_check_retrieval.py
 │   └── ask.py               # question -> answer CLI
-├── src/rag/                 # config, chunking, embeddings, store, llm, generate, pipeline
-└── tests/                   # smoke, chunking, store, generate, pipeline
+├── src/rag/                 # config, chunking, embeddings, store, retrieval, llm, generate, pipeline
+└── tests/                   # smoke, chunking, store, retrieval, generate, pipeline
 ```
 
 Empty directories `eval/` and `docs/screenshots/` are placeholders for later steps.

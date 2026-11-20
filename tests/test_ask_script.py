@@ -80,3 +80,18 @@ def test_a_long_answer_is_wrapped_and_keeps_paragraphs():
     answer = out.split("Answer:\n")[1].split("\n\nSources:")[0]
     assert all(len(line) <= 100 for line in answer.splitlines())
     assert "\n\n  Second paragraph." in answer
+
+
+def test_hybrid_chunks_show_their_fused_score_and_a_dash_when_there_is_no_distance():
+    chunks = [
+        {**RESULT["chunks"][0], "score": 0.0328},
+        {**RESULT["chunks"][0], "id": "x", "distance": None, "score": 0.0164},
+    ]
+    out = ask.format_result("Q?", {**RESULT, "chunks": chunks}, "hybrid")
+    assert "score=0.0328" in out and "distance=0.4312" in out
+    assert "distance=-" in out and "score=0.0164" in out
+    assert "None" not in out
+
+
+def test_the_mode_flag_offers_hybrid():
+    assert "hybrid" in ask.pipeline.MODES
