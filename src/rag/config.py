@@ -58,3 +58,6 @@ CANDIDATE_POOL = 10
 # chunk) pair together and so judges relevance better than the embedding comparison. It is slower
 # per chunk, hence a short list: 20 is 40% of this 50-chunk corpus. The final top-n is TOP_K.
 RERANK_CANDIDATES = 20
+
+# --- Evaluation (RAG-8) ---
+EVAL_SET = ROOT / "eval" / "test_set.json"

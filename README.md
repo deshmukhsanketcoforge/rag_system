@@ -16,7 +16,8 @@ Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store
 | Basic RAG pipeline (vector-only retrieval + LLM answer) | Done |
 | Hybrid retrieval (keyword + vector, Reciprocal Rank Fusion) | Done |
 | Cross-encoder reranking | Done |
-| Eval harness, diagnosis, source attribution | Not started |
+| Evaluation harness (retrieval recall, answer accuracy) | Done |
+| Diagnosis, source attribution | Not started |
 
 This README grows as each step lands. The full plan is tracked in Linear (project "RAG System").
 
@@ -196,6 +197,24 @@ Code: `src/rag/rerank.py`. Vector and keyword search score the question and each
 - **Not always better:** reranking is not a free win. On "How many paid holidays does the company have?" the answer chunk moves from 1st to 2nd. The eval harness is where the three modes get compared on one question set.
 - **The flag:** the three modes (`vector`, `hybrid`, `rerank`) are the with/without switch, so the eval can compare them and the first pipeline can still be reproduced.
 
+### Evaluation harness
+
+```bash
+python scripts/run_eval.py                  # recall@3 for vector, hybrid, rerank (no LLM)
+python scripts/run_eval.py --answers        # also generate answers and check keywords
+python scripts/run_eval.py --answers --save # append the run to eval/results.md
+pytest tests/test_retrieval.py tests/test_answers.py -s
+```
+
+The fixed question set is `eval/test_set.json` (13 cases). Each case has a question, the expected document and section, and keywords the answer must contain. The mix is simple facts, cross-section questions, exact form codes, two planted-issue questions (expected answer follows the current PTO policy) and one unanswerable question (expected: the fallback sentence). Logic is in `src/rag/evaluation.py`.
+
+- **Retrieval recall@k:** is the expected (document, section) among the top `k` (3) chunks? No LLM call, so it runs anywhere. The unanswerable case has no expected chunk and is left out.
+- **Answer accuracy:** does the generated answer contain every expected keyword (case-insensitive, markdown bold ignored, whole-token match so "5 days" is not found in "15 days")?
+- **The two are separate on purpose.** In the first run every wrong answer coincided with a retrieval miss (EX-15 for vector, the mileage rate for hybrid), so the problem was retrieval, not generation.
+- **Results (recall@3 / answer accuracy):** vector 92% / 92%, hybrid 92% / 92%, rerank 100% / 100%. `eval/results.md` keeps every saved run.
+- **Thresholds:** pytest requires recall and accuracy of at least 0.8. That is a floor with room for one or two misses, not a target.
+- **Caveats:** 13 questions is a small set, and two of them (the mileage and EX-15 questions) were chosen because retrieval modes disagree on them, so the comparison flatters the later modes. The keyword check cannot see a hedged answer: for the PTO questions it passes when the answer says "20 days" even if it also mentions the outdated 15. RAG-9 looks at that.
+
 ## Tests
 
 ```bash
@@ -210,6 +229,8 @@ docker compose run --rm app        # container
 - `test_pipeline.py`: `answer` returns answer, chunks and sources; the LLM sees exactly the retrieved chunks; `k` and `mode` handling; empty question rejected. Fake embedder, fake LLM, temporary store.
 - `test_ask_script.py`: the output layout of `scripts/ask.py`.
 - `test_retrieval.py`: tokenizing, keyword scoring (case, word-start matching, codes, phrases), RRF (scores, dedupe, ties), hybrid search on a temporary store with a fake embedder, and `test_hybrid_beats_vector`, which builds the real corpus with the real embedding model (a few seconds; skipped if the model cannot be downloaded) and checks that hybrid finds chunks vector search ranks low.
+- `test_evaluation.py`, `test_eval_set.py`, `test_run_eval.py`: the harness logic (matching, scoring, loading, report), a check that every expectation in `eval/test_set.json` exists in the corpus (offline), and the runner with fakes.
+- `test_retrieval.py` also holds the recall tests on the eval set (real corpus and models, no LLM), and `test_answers.py` the accuracy tests (marked `llm`, skipped without the Foundry settings).
 - `test_rerank.py`: reranking with a fake scorer (order, top-k, ties, no input mutation, empty input, wrong score count) and `test_rerank_beats_hybrid`, which uses the real corpus and the real cross-encoder (skipped if a model cannot be downloaded) and checks that the answer chunk moves up.
 - `test_pipeline_llm.py`: two end-to-end tests with the real embedding model and the real LLM (a grounded answer, and the fallback for an unanswerable question). Marked `llm`: they are skipped when the Foundry settings are not set, so `pytest` and CI work without them.
 - `test_llm.py`: the client factory (settings validation, error messages, Foundry client and endpoint, whitespace trimmed). No network.
@@ -234,7 +255,7 @@ ruff format --check .   # what CI runs
 `.github/workflows/ci.yml` runs on pushes to `main` and on pull requests targeting `main`:
 
 - `lint`: runs `ruff check .` and `ruff format --check .`. It is fast and does not install the heavy dependencies.
-- `test`: installs CPU-only PyTorch and the pinned requirements, then runs `pytest -v`. It passes the `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_BASE_URL` repository secrets to the tests; without them the `llm` tests are skipped.
+- `test`: restores the cached Hugging Face models, installs CPU-only PyTorch and the pinned requirements, then runs `pytest -v`. It passes the `ANTHROPIC_FOUNDRY_API_KEY` and `ANTHROPIC_FOUNDRY_BASE_URL` repository secrets to the tests; without them the `llm` tests are skipped.
 - `docker`: builds the image and runs `pytest -v` inside it.
 
 ## Configuration
@@ -262,13 +283,15 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 │   ├── raw/                 # generated policy documents
 │   └── generate_docs.py     # LLM document generator
 ├── docs/planted_issue.md    # the planted data quality issue
+├── eval/                    # test_set.json (the question set), results.md (saved runs)
 ├── scripts/
 │   ├── 01_minimal_loop.py   # two-text proof
 │   ├── 02_ingest.py         # chunk + embed + store the corpus
 │   ├── 03_check_retrieval.py
-│   └── ask.py               # question -> answer CLI
-├── src/rag/                 # config, chunking, embeddings, store, retrieval, rerank, llm, generate, pipeline
-└── tests/                   # smoke, chunking, store, retrieval, rerank, generate, pipeline
+│   ├── ask.py               # question -> answer CLI
+│   └── run_eval.py          # evaluation harness runner
+├── src/rag/                 # config, chunking, embeddings, store, retrieval, rerank, evaluation, llm, generate, pipeline
+└── tests/                   # smoke, chunking, store, retrieval, rerank, evaluation, generate, pipeline
 ```
 
 Empty directories `eval/` and `docs/screenshots/` are placeholders for later steps.

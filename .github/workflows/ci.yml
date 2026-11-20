@@ -44,6 +44,15 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # The eval tests download two models (embedding + cross-encoder, ~200 MB). Cached, so a run
+      # only downloads on a cold cache. The key hashes config.py, so changing a model (or any other
+      # setting there) starts a fresh cache instead of restoring a stale one that is never re-saved.
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ hashFiles('src/rag/config.py') }}
+
       # Tests marked `llm` call the API. They are skipped when the secret is missing
       # (forks, or a repo without it), so CI stays green either way.
       - name: Run tests

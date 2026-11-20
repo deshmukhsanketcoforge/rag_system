@@ -3,9 +3,10 @@
 import chromadb
 import pytest
 
-from rag import retrieval, store
+from rag import evaluation as ev
+from rag import pipeline, retrieval, store
 from rag.chunking import Chunk
-from rag.config import RRF_K
+from rag.config import RRF_K, TOP_K
 
 
 def ch(id_, text, doc="doc", section="1. Section"):
@@ -338,3 +339,33 @@ def test_the_vector_list_is_not_cut_to_k_before_fusing(tmp_path):
 def test_a_phrase_does_not_match_from_the_middle_of_a_word():
     chunks = [ch("a", "form and pto"), ch("b", "laptop form")]
     assert ids(retrieval.keyword_search("pto form", chunks, k=2)) == ["a", "b"]
+
+
+# --- retrieval recall on the eval set (RAG-8): no LLM ---
+
+RECALL_THRESHOLD = 0.8  # measured: vector 92%, hybrid 92%, rerank 100% (eval/results.md)
+
+
+@pytest.mark.parametrize("mode", pipeline.MODES)
+def test_recall_at_k_on_the_eval_set(mode, real_collection, cross_encoder):
+    """The expected (document, section) is among the top-k chunks for most eval questions."""
+    collection, embed = real_collection
+    cases = ev.load_cases()
+    results = ev.evaluate_retrieval(
+        cases,
+        lambda q: pipeline.retrieve(q, collection, embed, k=TOP_K, mode=mode),
+        k=TOP_K,
+    )
+    print(f"\n{ev.format_report(mode, results, None, TOP_K)}")
+    assert ev.recall(results) >= RECALL_THRESHOLD, [r.case.id for r in results if not r.hit]
+
+
+def test_reranking_does_not_lower_recall_compared_with_vector_only(real_collection, cross_encoder):
+    collection, embed = real_collection
+    cases = ev.load_cases()
+
+    def recall_of(mode):
+        search = lambda q: pipeline.retrieve(q, collection, embed, k=TOP_K, mode=mode)  # noqa: E731
+        return ev.recall(ev.evaluate_retrieval(cases, search, k=TOP_K))
+
+    assert recall_of("rerank") >= recall_of("vector")
