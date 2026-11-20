@@ -3,7 +3,7 @@
 import chromadb
 import pytest
 
-from rag import generate, pipeline, store
+from rag import attribution, generate, pipeline, store
 from rag.chunking import Chunk
 
 VECTORS = {
@@ -50,7 +50,7 @@ def _answer(question, collection, **kw):
 def test_answer_returns_answer_chunks_and_sources(collection):
     llm = RecordingLLM()
     out = _answer("text 1", collection, k=2, llm=llm)
-    assert set(out) == {"answer", "chunks", "sources"}
+    assert set(out) == {"answer", "chunks", "sources", "sources_basis", "invalid_citations"}
     assert out["answer"] == "ANSWER"
     assert out["chunks"][0]["id"] == "a::1"  # nearest chunk first
     assert len(out["chunks"]) == 2
@@ -87,7 +87,9 @@ def test_sources_are_deduplicated_when_a_section_appears_twice(collection):
         {"id": "x", "text": "t", "metadata": {"doc_name": "d", "section": "S"}, "distance": 0.1},
         {"id": "y", "text": "t", "metadata": {"doc_name": "d", "section": "S"}, "distance": 0.2},
     ]
-    assert pipeline.sources_of(hits) == [{"doc_name": "d", "section": "S"}]
+    assert attribution.group_sources(hits, [1, 2]) == [
+        {"doc_name": "d", "section": "S", "ranks": [1, 2]}
+    ]
 
 
 def test_unknown_mode_is_rejected(collection):
@@ -283,7 +285,8 @@ def test_answer_from_chunks_generates_from_exactly_the_chunks_it_is_given():
     ]
     out = pipeline.answer_from_chunks("q", chunks, llm=llm)
     assert out["answer"] == "ANSWER" and out["chunks"] == chunks
-    assert out["sources"] == [{"doc_name": "doc_a", "section": "1. Alpha"}]
+    assert out["sources"] == [{"doc_name": "doc_a", "section": "1. Alpha", "ranks": [1]}]
+    assert out["sources_basis"] == "retrieved"  # the stub answer cites nothing
     assert "text 0" in llm.prompts[0]
 
 
@@ -292,3 +295,45 @@ def test_answer_from_chunks_with_nothing_retrieved_gives_the_fallback_without_an
     out = pipeline.answer_from_chunks("q", [], llm=llm)
     assert out["answer"] == generate.NOT_FOUND_ANSWER and out["sources"] == []
     assert llm.prompts == []
+
+
+# --- source attribution (RAG-10) ---
+
+
+def test_the_sources_are_the_passages_the_answer_cites(collection):
+    out = _answer("text 0", collection, k=3, llm=RecordingLLM(reply="It is 20 days [2]."))
+    assert out["sources_basis"] == "cited"
+    assert [s["ranks"] for s in out["sources"]] == [[2]]
+    cited = out["chunks"][1]["metadata"]
+    assert out["sources"][0]["doc_name"] == cited["doc_name"]
+    assert out["sources"][0]["section"] == cited["section"]
+    assert out["invalid_citations"] == []
+
+
+def test_a_citation_to_a_passage_that_was_not_retrieved_is_reported_not_trusted(collection):
+    out = _answer("text 0", collection, k=3, llm=RecordingLLM(reply="Fact [1]. Other [9]."))
+    assert out["invalid_citations"] == [9]
+    assert [s["ranks"] for s in out["sources"]] == [[1]]
+
+
+def test_an_answer_that_cites_nothing_falls_back_to_the_retrieved_chunks_and_says_so(collection):
+    out = _answer("text 0", collection, k=3, llm=RecordingLLM(reply="No numbers here."))
+    assert out["sources_basis"] == "retrieved"
+    assert len(out["sources"]) == 3
+
+
+def test_the_fallback_answer_has_basis_none(collection):
+    out = _answer("text 0", collection, llm=RecordingLLM(reply=generate.NOT_FOUND_ANSWER))
+    assert out["sources_basis"] == "none" and out["sources"] == []
+
+
+@pytest.mark.parametrize("mode", pipeline.MODES)
+def test_every_mode_keeps_the_document_and_section_on_every_chunk(mode, collection):
+    chunks = pipeline.retrieve(
+        "text 0", collection, fake_embed, k=4, mode=mode, reranker=FakeReranker()
+    )
+    assert chunks
+    for chunk in chunks:
+        assert chunk["metadata"]["doc_name"] in {"doc_a", "doc_b"}
+        assert chunk["metadata"]["section"]
+        assert "chunk_index" in chunk["metadata"]

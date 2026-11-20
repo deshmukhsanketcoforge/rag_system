@@ -10,9 +10,9 @@ from collections.abc import Callable
 from chromadb.errors import NotFoundError
 from dotenv import load_dotenv
 
+from rag import attribution, retrieval, store
 from rag import generate as gen
 from rag import rerank as rr
-from rag import retrieval, store
 from rag.config import RERANK_CANDIDATES, ROOT, TOP_K
 from rag.llm import require_settings
 
@@ -39,18 +39,6 @@ def retrieve(
     if mode == "hybrid":
         return retrieval.hybrid_search(question, collection, embedder, k=k)
     return store.query(collection, embedder([question])[0], k=k)
-
-
-def sources_of(chunks: list[dict]) -> list[dict]:
-    """Distinct (document, section) pairs in rank order."""
-    seen, out = set(), []
-    for chunk in chunks:
-        meta = chunk["metadata"]
-        key = (meta["doc_name"], meta["section"])
-        if key not in seen:
-            seen.add(key)
-            out.append({"doc_name": key[0], "section": key[1]})
-    return out
 
 
 def _require_ingested(collection=None):
@@ -85,15 +73,19 @@ def resolve_defaults(
 
 
 def answer_from_chunks(question: str, chunks: list[dict], llm=None) -> dict:
-    """Generate from chunks that were already retrieved: {answer, chunks, sources}.
+    """Generate from chunks that were already retrieved.
 
-    A fallback answer ("not enough information") has no sources, since nothing supports it.
+    Returns {answer, chunks, sources, sources_basis, invalid_citations}. The sources are the
+    passages the answer cites, checked against `chunks` (see attribution.attribute).
     """
     text = gen.generate(question, chunks, client=llm)
+    found = attribution.attribute(text, chunks)
     return {
         "answer": text,
         "chunks": chunks,
-        "sources": [] if text == gen.NOT_FOUND_ANSWER else sources_of(chunks),
+        "sources": found["sources"],
+        "sources_basis": found["basis"],
+        "invalid_citations": found["invalid"],
     }
 
 
@@ -106,7 +98,7 @@ def answer(
     llm=None,
     reranker: Callable | None = None,
 ) -> dict:
-    """Retrieve, generate, and return {answer, chunks, sources}.
+    """Retrieve, generate, and return {answer, chunks, sources, sources_basis, invalid_citations}.
 
     collection, embedder and llm default to the real ones; tests pass fakes. Everything that can
     fail cheaply (question, k, mode, API key, empty store) is checked before the model loads.
