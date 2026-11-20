@@ -32,3 +32,12 @@ CHUNK_OVERLAP_WORDS = 20
 # Everything besides the chunk text that changes a stored vector. Part of every chunk's content
 # hash, so changing the model or the chunk settings re-embeds the corpus (see store.sync).
 INGEST_FINGERPRINT = f"{EMBEDDING_MODEL}|max={CHUNK_MAX_WORDS}|overlap={CHUNK_OVERLAP_WORDS}"
+
+# --- Retrieval and generation (RAG-5) ---
+# Three chunks is about 300 words of context: enough to cover the two PTO policies plus one more
+# section, small enough that the prompt stays focused. Revisit once the eval harness exists.
+TOP_K = 3
+# Answers are short policy lookups. The cap leaves room for a model that thinks before answering.
+MAX_ANSWER_TOKENS = 2000
+# claude-sonnet-5-5 rejects the temperature parameter (HTTP 400, checked against the live API),
+# so answers cannot be pinned to temperature 0 and may vary slightly from run to run.

@@ -44,8 +44,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Tests marked `llm` call the API. They are skipped when the secret is missing
+      # (forks, or a repo without it), so CI stays green either way.
       - name: Run tests
         run: pytest -v
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
   docker:
     runs-on: ubuntu-latest
