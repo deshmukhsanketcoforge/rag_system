@@ -1,6 +1,6 @@
 """End-to-end tests against the real embedding model and the real LLM.
 
-Skipped without ANTHROPIC_API_KEY (see conftest.py). They build their own temporary vector
+Skipped without the Foundry settings (see conftest.py). They build their own temporary vector
 store from data/raw, so they do not depend on or touch chroma_db.
 """
 

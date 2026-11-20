@@ -11,7 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-LLM_MODEL = "claude-sonnet-5-5"
+# The Azure AI Foundry deployment name, sent as `model` (see rag/llm.py).
+# Override with RAG_LLM_MODEL.
+LLM_MODEL = os.getenv("RAG_LLM_MODEL", "claude-opus-5-5-fast")
 
 # Overridable so the container can keep the store on a volume (see Dockerfile).
 CHROMA_PATH = os.getenv("RAG_CHROMA_PATH", str(ROOT / "chroma_db"))
@@ -39,5 +41,5 @@ INGEST_FINGERPRINT = f"{EMBEDDING_MODEL}|max={CHUNK_MAX_WORDS}|overlap={CHUNK_OV
 TOP_K = 3
 # Answers are short policy lookups. The cap leaves room for a model that thinks before answering.
 MAX_ANSWER_TOKENS = 2000
-# claude-sonnet-5-5 rejects the temperature parameter (HTTP 400, checked against the live API),
-# so answers cannot be pinned to temperature 0 and may vary slightly from run to run.
+# Both the direct API and the Foundry deployment reject `temperature` (HTTP 400, checked live), so
+# it is not sent and answers may vary slightly from run to run.

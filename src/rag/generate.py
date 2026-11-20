@@ -5,6 +5,7 @@ from html import escape
 import anthropic
 
 from rag.config import LLM_MODEL, MAX_ANSWER_TOKENS
+from rag.llm import llm_client
 
 NOT_FOUND_ANSWER = "I don't have enough information in the policy documents to answer that."
 
@@ -36,11 +37,13 @@ def build_user_prompt(question: str, chunks: list[dict]) -> str:
     )
 
 
-def generate(question: str, chunks: list[dict], client: anthropic.Anthropic | None = None) -> str:
+def generate(
+    question: str, chunks: list[dict], client: anthropic.AnthropicFoundry | None = None
+) -> str:
     """Ask the LLM to answer from `chunks`. With nothing retrieved, skip the call entirely."""
     if not chunks:
         return NOT_FOUND_ANSWER
-    client = client or anthropic.Anthropic()
+    client = client or llm_client()
     response = client.messages.create(
         model=LLM_MODEL,
         max_tokens=MAX_ANSWER_TOKENS,

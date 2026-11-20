@@ -4,7 +4,6 @@
 the first pipeline can still be reproduced at the end.
 """
 
-import os
 from collections.abc import Callable
 
 from chromadb.errors import NotFoundError
@@ -13,6 +12,7 @@ from dotenv import load_dotenv
 from rag import generate as gen
 from rag import store
 from rag.config import ROOT, TOP_K
+from rag.llm import require_settings
 
 MODES = ("vector",)
 
@@ -72,8 +72,8 @@ def answer(
         raise ValueError(f"k must be at least 1, got {k}")
     if mode not in MODES:
         raise ValueError(f"unknown mode '{mode}', expected one of {MODES}")
-    if llm is None and not os.getenv("ANTHROPIC_API_KEY"):
-        raise RuntimeError("ANTHROPIC_API_KEY is not set: add it to .env or the environment")
+    if llm is None:
+        require_settings()
     collection = _require_ingested(collection)
     if embedder is None:
         from rag.embeddings import embed as embedder

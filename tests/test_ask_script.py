@@ -43,12 +43,12 @@ def test_negative_or_zero_k_is_rejected_by_the_parser(monkeypatch, capsys):
 
 def test_setup_and_api_errors_become_one_line_messages(monkeypatch, capsys):
     def fail(*a, **kw):
-        raise RuntimeError("ANTHROPIC_API_KEY is not set")
+        raise RuntimeError("Foundry is not configured")
 
     monkeypatch.setattr(ask.pipeline, "answer", fail)
     assert ask.main(["q"]) == 1
     err = capsys.readouterr().err
-    assert err.strip() == "error: ANTHROPIC_API_KEY is not set"
+    assert err.strip() == "error: Foundry is not configured"
 
 
 def test_api_errors_are_caught_too(monkeypatch, capsys):

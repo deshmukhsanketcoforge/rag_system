@@ -9,7 +9,6 @@ Planted issue (see docs/planted_issue.md): pto_policy_v1_2022.md is an outdated
 duplicate of pto_policy.md with conflicting numbers and no "superseded" marker.
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from rag.config import LLM_MODEL  # noqa: E402
+from rag.llm import llm_client  # noqa: E402
 
 RAW_DIR = ROOT / "data" / "raw"
 MIN_WORDS, MAX_WORDS = 500, 800
@@ -93,7 +93,7 @@ def word_count(text: str) -> int:
     return len(text.split())
 
 
-def generate(client: anthropic.Anthropic, name: str, topic: str) -> str:
+def generate(client: anthropic.AnthropicFoundry, name: str, topic: str) -> str:
     feedback = ""
     for attempt in range(1, MAX_ATTEMPTS + 1):
         msg = client.messages.create(
@@ -116,9 +116,10 @@ def generate(client: anthropic.Anthropic, name: str, topic: str) -> str:
 
 def main() -> None:
     load_dotenv(ROOT / ".env")
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        sys.exit("ANTHROPIC_API_KEY is not set (see .env.example)")
-    client = anthropic.Anthropic()
+    try:
+        client = llm_client()
+    except RuntimeError as exc:
+        sys.exit(f"error: {exc}")
 
     wanted = sys.argv[1:] or list(POLICIES)
     unknown = [w for w in wanted if w not in POLICIES]
