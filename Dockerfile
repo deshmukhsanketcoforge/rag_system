@@ -10,7 +10,7 @@ WORKDIR /app
 
 # CPU-only torch first: the default Linux wheel bundles CUDA and is several GB.
 # sentence-transformers then finds torch already installed.
-RUN pip install torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install torch==2.15.0 --index-url https://download.pytorch.org/whl/cpu
 
 # Dependencies before code, so code edits do not invalidate this layer.
 COPY requirements.txt .
