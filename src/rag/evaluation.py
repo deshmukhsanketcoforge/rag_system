@@ -108,15 +108,15 @@ def retrieval_rank(chunks: list[dict], case: Case) -> int | None:
     return None
 
 
-def _normalize(text: str) -> str:
+def normalize(text: str) -> str:
     """Lowercase, drop markdown bold, make any run of whitespace (even non-breaking) one space."""
     return re.sub(r"\s+", " ", text.replace("*", "").lower()).strip()
 
 
 def contains(text: str, keyword: str) -> bool:
     """Case-insensitive, whole-token match: '5 days' is not found in '15 days'."""
-    pattern = r"(?<![a-z0-9])" + re.escape(_normalize(keyword)) + r"(?![a-z0-9])"
-    return re.search(pattern, _normalize(text)) is not None
+    pattern = r"(?<![a-z0-9])" + re.escape(normalize(keyword)) + r"(?![a-z0-9])"
+    return re.search(pattern, normalize(text)) is not None
 
 
 def missing_keywords(answer: str, case: Case) -> list[str]:
