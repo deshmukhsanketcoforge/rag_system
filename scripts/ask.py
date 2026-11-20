@@ -39,9 +39,29 @@ def format_result(question: str, result: dict, mode: str) -> str:
             f"  [{rank}] distance={distance}{score}  {meta['doc_name']} > {meta['section']}"
         )
         lines.append(textwrap.indent(textwrap.fill(chunk["text"], 96), "      "))
-    lines += ["", "Answer:", _wrap_answer(result["answer"]), "", "Sources:"]
-    lines += [f"  - {s['doc_name']} > {s['section']}" for s in result["sources"]] or ["  none"]
+    lines += ["", "Answer:", _wrap_answer(result["answer"]), ""]
+    lines += _format_sources(result)
     return "\n".join(lines)
+
+
+_SOURCES_TITLE = {
+    "cited": "Sources (cited in the answer):",
+    "retrieved": "Sources (the answer cited no passage; these are the retrieved chunks):",
+    "none": "Sources:",
+}
+
+
+def _format_sources(result: dict) -> list[str]:
+    lines = [_SOURCES_TITLE[result["sources_basis"]]]
+    for s in result["sources"]:
+        numbers = ", ".join(str(n) for n in s["ranks"])
+        lines.append(f"  - [{numbers}] {s['doc_name']} > {s['section']}")
+    if not result["sources"]:
+        lines.append("  none")
+    if result["invalid_citations"]:
+        numbers = ", ".join(str(n) for n in result["invalid_citations"])
+        lines.append(f"Warning: the answer cites passage(s) {numbers}, which were not retrieved.")
+    return lines
 
 
 def _positive_int(value: str) -> int:

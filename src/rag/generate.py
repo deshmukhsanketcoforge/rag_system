@@ -17,7 +17,11 @@ knowledge and do not guess. If the passages do not contain the answer, reply exa
 "{NOT_FOUND_ANSWER}"
 
 Be concise and state the specific figures, deadlines and form names the passages \
-give."""
+give.
+
+After each fact, cite the passage or passages it comes from by their rank number in square \
+brackets, like [1] or [1, 2]. Cite only passages that contain the fact, and never use a number \
+that is not a passage rank. The fixed reply above is given without any citation."""
 
 
 def build_user_prompt(question: str, chunks: list[dict]) -> str:

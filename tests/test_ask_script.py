@@ -18,7 +18,9 @@ RESULT = {
             "distance": 0.4312,
         }
     ],
-    "sources": [{"doc_name": "remote_work_policy", "section": "4. Equipment"}],
+    "sources": [{"doc_name": "remote_work_policy", "section": "4. Equipment", "ranks": [1]}],
+    "sources_basis": "cited",
+    "invalid_citations": [],
 }
 
 
@@ -70,7 +72,7 @@ def test_success_returns_zero_and_prints_the_result(monkeypatch, capsys):
 
 
 def test_empty_sources_are_shown_as_none():
-    out = ask.format_result("Who?", {**RESULT, "sources": []}, "vector")
+    out = ask.format_result("Who?", {**RESULT, "sources": [], "sources_basis": "none"}, "vector")
     assert out.rstrip().endswith("Sources:\n  none")
 
 
@@ -101,3 +103,40 @@ def test_reranked_chunks_show_the_rerank_score():
     chunks = [{**RESULT["chunks"][0], "score": 0.0328, "rerank_score": 7.25}]
     out = ask.format_result("Q?", {**RESULT, "chunks": chunks}, "rerank")
     assert "rerank=7.2500" in out
+
+
+# --- source attribution (RAG-10) ---
+
+
+def test_cited_sources_show_their_passage_numbers_and_say_they_were_cited():
+    out = ask.format_result("q", RESULT, "vector")
+    assert "Sources (cited in the answer):" in out
+    assert "  - [1] remote_work_policy > 4. Equipment" in out
+
+
+def test_a_source_behind_several_passages_lists_all_their_numbers():
+    sources = [{"doc_name": "d", "section": "S", "ranks": [1, 3]}]
+    out = ask.format_result("q", {**RESULT, "sources": sources}, "vector")
+    assert "  - [1, 3] d > S" in out
+
+
+def test_retrieved_sources_say_the_answer_cited_nothing():
+    result = {**RESULT, "sources_basis": "retrieved"}
+    out = ask.format_result("q", result, "vector")
+    assert "the answer cited no passage" in out
+    assert "Sources (cited in the answer):" not in out
+    assert "  - [1] remote_work_policy > 4. Equipment" in out
+
+
+def test_invalid_citations_are_shown_as_a_warning():
+    out = ask.format_result("q", {**RESULT, "invalid_citations": [7, 9]}, "vector")
+    assert "Warning" in out and "7, 9" in out and "not retrieved" in out
+
+
+def test_no_warning_when_every_citation_is_valid():
+    assert "Warning" not in ask.format_result("q", RESULT, "vector")
+
+
+def test_the_sources_come_after_the_answer():
+    out = ask.format_result("q", RESULT, "vector")
+    assert out.index("Answer:") < out.index("Sources (cited")

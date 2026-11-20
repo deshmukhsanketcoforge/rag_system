@@ -143,3 +143,17 @@ def test_default_client_comes_from_the_llm_factory(monkeypatch):
     monkeypatch.setattr(generate, "llm_client", lambda: fake)
     assert generate.generate("q", [_hit(0)]) == "The answer."
     assert len(fake.calls) == 1
+
+
+# --- citations (RAG-10) ---
+
+
+def test_the_system_prompt_asks_for_passage_number_citations():
+    prompt = generate.SYSTEM_PROMPT
+    assert "[1]" in prompt and "[1, 2]" in prompt
+    assert "square brackets" in prompt
+
+
+def test_the_fallback_sentence_is_still_required_verbatim_and_without_citations():
+    assert f'"{generate.NOT_FOUND_ANSWER}"' in generate.SYSTEM_PROMPT
+    assert "without any citation" in generate.SYSTEM_PROMPT

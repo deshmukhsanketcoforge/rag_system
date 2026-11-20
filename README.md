@@ -18,7 +18,7 @@ Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store
 | Cross-encoder reranking | Done |
 | Evaluation harness (retrieval recall, answer accuracy) | Done |
 | Diagnosis of the planted data quality issue | Done |
-| Source attribution | Not started |
+| Source attribution (cited passages, validated) | Done |
 
 This README grows as each step lands. The full plan is tracked in Linear (project "RAG System").
 
@@ -161,11 +161,11 @@ docker compose run --rm app python scripts/ask.py "How much is the home office e
 
 The script prints the question, the retrieved chunks with their distances, the answer and the sources.
 
-Code: `src/rag/generate.py` (prompt and LLM call) and `src/rag/pipeline.py` (`answer(question) -> {answer, chunks, sources}`).
+Code: `src/rag/generate.py` (prompt and LLM call) and `src/rag/pipeline.py` (`answer(question) -> {answer, chunks, sources, sources_basis, invalid_citations}`).
 
 - **Retrieval:** the question is embedded and the top `TOP_K` (3) chunks are fetched by cosine distance. `pipeline.answer(..., mode="vector")` is the switch: `"hybrid"` (below) is the second mode and reranking will be the third, so this first version can still be reproduced.
 - **Prompt:** the chunks go to the LLM as numbered passages, each labelled with its document and section. The system prompt says to answer only from those passages, not to guess, and otherwise to reply with a fixed sentence ("I don't have enough information in the policy documents to answer that."). With nothing retrieved, the LLM is not called.
-- **Sources:** the distinct (document, section) pairs of the retrieved chunks, in rank order. When the answer is the fallback sentence, there are no sources, because nothing supports it. (Sources are the retrieved chunks, not a record of which ones the LLM actually used.)
+- **Sources:** the passages the answer cites, checked against the retrieved chunks (see Source attribution below). The fixed fallback sentence has no sources, because nothing supports it.
 - **Prompt format:** passages sit inside `<context>` and the question inside `<question>`. Passage text is escaped, so a chunk cannot close the context or fake a question, and the system prompt says passage text is reference material, never instructions.
 - **Fail fast:** an empty question, `k < 1`, an unknown mode, missing Foundry settings and an empty or missing vector store are all rejected before the embedding model loads. A response cut off at `max_tokens` raises instead of returning a partial answer. `ask.py` prints these as one-line `error: ...` messages.
 - **Response handling:** only `text` blocks are read, because responses can begin with a thinking block.
@@ -216,6 +216,20 @@ The fixed question set is `eval/test_set.json` (13 cases). Each case has a quest
 - **Thresholds:** pytest requires recall and accuracy of at least 0.8. That is a floor with room for one or two misses, not a target.
 - **Caveats:** 13 questions is a small set, and two of them (the mileage and EX-15 questions) were chosen because retrieval modes disagree on them, so the comparison flatters the later modes. The keyword check cannot see a hedged answer: for the PTO questions it passes when the answer says "20 days" even if it also mentions the outdated 15. RAG-9 looks at that.
 
+### Source attribution
+
+```bash
+python scripts/ask.py "What is the mileage rate for my own car?" --mode rerank
+```
+
+Code: `src/rag/attribution.py`. Every chunk keeps its `doc_name` and `section` through vector search, the hybrid merge and reranking. The answer's sources are the passages that informed it, not just everything that was retrieved:
+
+- **Citations:** the prompt asks the model to cite the passages a fact came from by their rank number, like `[1]` or `[1, 2]`. The numbers match the `[rank]` of the retrieved chunks that `ask.py` prints.
+- **Validation:** each cited number is checked against the passages the model was actually given. A real passage becomes a source. A number that is not a passage (a made-up citation) is reported as a warning and never becomes a source.
+- **Sources:** distinct (document, section) pairs with the passage numbers behind them, in passage order. Example: the mileage answer cites passages 1 and 3, so its sources are `[1] expense_reimbursement_policy > 4. Travel Expenses` and `[3] ... > 7. Non-Reimbursable Items`, not all three retrieved chunks.
+- **`sources_basis`** says where the sources came from: `cited` (the answer's valid citations), `retrieved` (the model cited nothing valid, so these are the chunks it was given, and the CLI says "the answer cited no passage") or `none` (the fixed fallback answer, or nothing retrieved).
+- **Limits:** a citation says which passage the model *says* it used; the harness checks it exists, not that the model read it correctly. The cited section is also a coarser claim than a quote. Answers vary between runs, so the exact citations do too.
+
 ### Diagnosing the planted issue
 
 ```bash
@@ -243,6 +257,7 @@ docker compose run --rm app        # container
 - `test_chunking.py`: size cap, subsection splitting, overlap, metadata, header chunk (capped too), code fences, titles, UTF-8, deterministic IDs.
 - `test_store.py`: incremental sync (first ingest, no-op re-run embeds nothing, only the changed chunk is re-embedded, new chunks added, removed chunks deleted, failed embedding loses nothing, wrong distance space rejected, fingerprint change and `--rebuild` re-embed all) and nearest-first query. Uses a fake embedder, so no model download is needed.
 - `test_generate.py`: prompt contents and order, grounding instruction, fallback answer, text-block extraction, no temperature sent. Uses a fake LLM client.
+- `test_attribution.py`: parsing citations, validating them against the retrieved passages, the three source bases, doc name and section surviving every retrieval mode on the real corpus, and (marked `llm`) real answers citing the section that holds the fact.
 - `test_pipeline.py`: `answer` returns answer, chunks and sources; the LLM sees exactly the retrieved chunks; `k` and `mode` handling; empty question rejected. Fake embedder, fake LLM, temporary store.
 - `test_ask_script.py`: the output layout of `scripts/ask.py`.
 - `test_retrieval.py`: tokenizing, keyword scoring (case, word-start matching, codes, phrases), RRF (scores, dedupe, ties), hybrid search on a temporary store with a fake embedder, and `test_hybrid_beats_vector`, which builds the real corpus with the real embedding model (a few seconds; skipped if the model cannot be downloaded) and checks that hybrid finds chunks vector search ranks low.
@@ -310,7 +325,7 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 │   ├── ask.py               # question -> answer CLI
 │   ├── run_eval.py          # evaluation harness runner
 │   └── diagnose.py          # two-question diagnosis + control test
-├── src/rag/                 # config, chunking, embeddings, store, retrieval, rerank, evaluation, diagnosis, llm, generate, pipeline
+├── src/rag/                 # config, chunking, embeddings, store, retrieval, rerank, attribution, evaluation, diagnosis, llm, generate, pipeline
 └── tests/                   # smoke, chunking, store, retrieval, rerank, evaluation, generate, pipeline
 ```
 
