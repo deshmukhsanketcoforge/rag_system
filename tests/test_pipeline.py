@@ -243,3 +243,52 @@ def test_rerank_mode_uses_the_loaded_scorer_when_none_is_passed(collection, monk
         "text 0", k=1, mode="rerank", collection=collection, embedder=fake_embed, llm=RecordingLLM()
     )
     assert out["chunks"][0]["id"] == "b::0" and len(reranker.calls) == 1
+
+
+# --- resolve_defaults and answer_from_chunks (shared with scripts/run_eval.py)
+
+
+def test_resolve_defaults_hands_back_what_it_was_given(collection):
+    got = pipeline.resolve_defaults(collection, fake_embed)
+    assert got == (collection, fake_embed, None)
+
+
+def test_resolve_defaults_rejects_an_empty_store(tmp_path):
+    empty = chromadb.PersistentClient(path=str(tmp_path)).create_collection("policies")
+    with pytest.raises(RuntimeError, match="02_ingest"):
+        pipeline.resolve_defaults(empty, fake_embed)
+
+
+def test_resolve_defaults_loads_the_cross_encoder_only_when_asked(collection, monkeypatch):
+    loaded = []
+    monkeypatch.setattr(pipeline.rr, "load_scorer", lambda: loaded.append(1) or "scorer")
+    assert pipeline.resolve_defaults(collection, fake_embed)[2] is None
+    assert pipeline.resolve_defaults(collection, fake_embed, rerank=True)[2] == "scorer"
+    assert loaded == [1]
+
+
+def test_resolve_defaults_keeps_a_given_reranker(collection, monkeypatch):
+    def not_called():
+        raise AssertionError("must not load a second scorer")
+
+    monkeypatch.setattr(pipeline.rr, "load_scorer", not_called)
+    mine = object()
+    assert pipeline.resolve_defaults(collection, fake_embed, mine, rerank=True)[2] is mine
+
+
+def test_answer_from_chunks_generates_from_exactly_the_chunks_it_is_given():
+    llm = RecordingLLM("ANSWER")
+    chunks = [
+        {"id": "a::0", "text": "text 0", "metadata": {"doc_name": "doc_a", "section": "1. Alpha"}}
+    ]
+    out = pipeline.answer_from_chunks("q", chunks, llm=llm)
+    assert out["answer"] == "ANSWER" and out["chunks"] == chunks
+    assert out["sources"] == [{"doc_name": "doc_a", "section": "1. Alpha"}]
+    assert "text 0" in llm.prompts[0]
+
+
+def test_answer_from_chunks_with_nothing_retrieved_gives_the_fallback_without_an_llm_call():
+    llm = RecordingLLM()
+    out = pipeline.answer_from_chunks("q", [], llm=llm)
+    assert out["answer"] == generate.NOT_FOUND_ANSWER and out["sources"] == []
+    assert llm.prompts == []

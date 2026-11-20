@@ -110,14 +110,6 @@ def test_load_scorer_returns_the_scoring_function(monkeypatch):
 # --- hybrid vs hybrid + rerank on the real corpus and the real cross-encoder (screenshot #6) ---
 
 
-@pytest.fixture(scope="module")
-def cross_encoder():
-    try:
-        rerank.score_pairs([("q", "t")])  # loads the model once
-    except OSError as exc:  # not cached and no network
-        pytest.skip(f"cross-encoder model unavailable: {exc}")
-
-
 def _rank_of(chunks, needle):
     return next((i for i, c in enumerate(chunks, start=1) if needle in c["text"]), None)
 

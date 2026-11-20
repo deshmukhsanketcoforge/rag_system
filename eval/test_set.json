@@ -1,0 +1,112 @@
+[
+  {
+    "id": "expense-01",
+    "category": "simple fact",
+    "question": "How soon must I submit an expense report?",
+    "expected_doc": "expense_reimbursement_policy",
+    "expected_section": "5. Submission and Approval",
+    "expected_keywords": ["30 days"]
+  },
+  {
+    "id": "expense-02",
+    "category": "simple fact",
+    "question": "What is the mileage rate for my own car?",
+    "expected_doc": "expense_reimbursement_policy",
+    "expected_section": "4. Travel Expenses",
+    "expected_keywords": ["$0.67"],
+    "note": "No word in common with 'per mile': vector and keyword search both struggle; reranking fixes it (RAG-7)."
+  },
+  {
+    "id": "expense-03",
+    "category": "cross-section",
+    "question": "If I lose a receipt, which form do I fill in and who has to sign it?",
+    "expected_doc": "expense_reimbursement_policy",
+    "expected_section": "3. General Requirements",
+    "expected_keywords": ["EX-15", "approver"],
+    "note": "The signer is 'the approver named in Section 5.3', which is a different section."
+  },
+  {
+    "id": "expense-04",
+    "category": "exact code",
+    "question": "Who signs EX-15?",
+    "expected_doc": "expense_reimbursement_policy",
+    "expected_section": "3. General Requirements",
+    "expected_keywords": ["approver"],
+    "note": "Exact form code: the case hybrid search was built for (RAG-6)."
+  },
+  {
+    "id": "remote-01",
+    "category": "simple fact",
+    "question": "How much is the home office equipment stipend?",
+    "expected_doc": "remote_work_policy",
+    "expected_section": "4. Equipment and Reimbursements",
+    "expected_keywords": ["$750"]
+  },
+  {
+    "id": "remote-02",
+    "category": "simple fact",
+    "question": "How many days a week must hybrid employees be in the office?",
+    "expected_doc": "remote_work_policy",
+    "expected_section": "3. Work Schedule",
+    "expected_keywords": ["2 days"]
+  },
+  {
+    "id": "remote-03",
+    "category": "exact code",
+    "question": "What is Form RW-7 used for?",
+    "expected_doc": "remote_work_policy",
+    "expected_section": "4. Equipment and Reimbursements",
+    "expected_keywords": ["internet"]
+  },
+  {
+    "id": "security-01",
+    "category": "simple fact",
+    "question": "How long must my password be?",
+    "expected_doc": "security_policy",
+    "expected_section": "3. Account Security",
+    "expected_keywords": ["14 characters"]
+  },
+  {
+    "id": "security-02",
+    "category": "simple fact",
+    "question": "How quickly must I report a security incident?",
+    "expected_doc": "security_policy",
+    "expected_section": "6. Incident Response",
+    "expected_keywords": ["4 hours"]
+  },
+  {
+    "id": "security-03",
+    "category": "cross-section",
+    "question": "How long after a customer's contract ends can we keep their data?",
+    "expected_doc": "security_policy",
+    "expected_section": "5. Data Classification and Handling",
+    "expected_keywords": ["90 days"]
+  },
+  {
+    "id": "pto-01",
+    "category": "planted issue",
+    "question": "How many PTO days do employees get per year?",
+    "expected_doc": "pto_policy",
+    "expected_section": "3. Annual Allowance",
+    "expected_keywords": ["20 days"],
+    "note": "Planted issue: pto_policy_v1_2022 says 15. The expected answer follows the CURRENT policy (pto_policy, 20 days). The keyword check cannot see a wrong or hedged answer that also contains '20 days'; RAG-9 looks at that."
+  },
+  {
+    "id": "pto-02",
+    "category": "planted issue",
+    "question": "How many unused PTO days can I carry over into next year?",
+    "expected_doc": "pto_policy",
+    "expected_section": "4. Carryover",
+    "expected_keywords": ["5 days"],
+    "note": "Planted issue: pto_policy_v1_2022 says 10. The expected answer follows the CURRENT policy (5 days)."
+  },
+  {
+    "id": "none-01",
+    "category": "unanswerable",
+    "question": "What is the CEO's favourite colour?",
+    "expected_doc": null,
+    "expected_section": null,
+    "expected_keywords": ["enough information"],
+    "note": "Not in any document. Expected: the fixed fallback sentence. Counted in answer accuracy, not in retrieval recall."
+  }
+]

@@ -5,6 +5,7 @@ import pytest
 from dotenv import load_dotenv
 
 from rag import llm, store
+from rag import rerank as rerank_module
 from rag.config import ROOT
 
 load_dotenv(ROOT / ".env")
@@ -32,3 +33,11 @@ def real_collection(tmp_path_factory):
     except OSError as exc:  # the embedding model is not cached and there is no network
         pytest.skip(f"embedding model unavailable: {exc}")
     return collection, embed
+
+
+@pytest.fixture(scope="session")
+def cross_encoder():
+    try:
+        rerank_module.score_pairs([("q", "t")])  # loads the model once
+    except OSError as exc:  # not cached and no network
+        pytest.skip(f"cross-encoder model unavailable: {exc}")

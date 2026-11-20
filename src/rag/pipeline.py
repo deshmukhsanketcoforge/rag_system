@@ -65,6 +65,38 @@ def _require_ingested(collection=None):
     return collection
 
 
+def resolve_defaults(
+    collection=None,
+    embedder: Callable | None = None,
+    reranker: Callable | None = None,
+    rerank: bool = False,
+) -> tuple:
+    """The (collection, embedder, reranker) to search with; anything left as None gets the real one.
+
+    The store is checked first and the cross-encoder loads before the embedding model, so a setup
+    problem fails fast, before any slow model loads. The reranker is only loaded when `rerank`.
+    """
+    collection = _require_ingested(collection)
+    if rerank and reranker is None:
+        reranker = rr.load_scorer()
+    if embedder is None:
+        from rag.embeddings import embed as embedder
+    return collection, embedder, reranker
+
+
+def answer_from_chunks(question: str, chunks: list[dict], llm=None) -> dict:
+    """Generate from chunks that were already retrieved: {answer, chunks, sources}.
+
+    A fallback answer ("not enough information") has no sources, since nothing supports it.
+    """
+    text = gen.generate(question, chunks, client=llm)
+    return {
+        "answer": text,
+        "chunks": chunks,
+        "sources": [] if text == gen.NOT_FOUND_ANSWER else sources_of(chunks),
+    }
+
+
 def answer(
     question: str,
     k: int = TOP_K,
@@ -78,7 +110,6 @@ def answer(
 
     collection, embedder and llm default to the real ones; tests pass fakes. Everything that can
     fail cheaply (question, k, mode, API key, empty store) is checked before the model loads.
-    A fallback answer ("not enough information") has no sources, since nothing supports it.
     """
     question = question.strip()
     if not question:
@@ -91,15 +122,8 @@ def answer(
         raise ValueError(f"a reranker only applies to mode 'rerank', not '{mode}'")
     if llm is None:
         require_settings()
-    collection = _require_ingested(collection)
-    if mode == "rerank" and reranker is None:
-        reranker = rr.load_scorer()  # fail fast, before the embedding model or the search
-    if embedder is None:
-        from rag.embeddings import embed as embedder
+    collection, embedder, reranker = resolve_defaults(
+        collection, embedder, reranker, rerank=mode == "rerank"
+    )
     chunks = retrieve(question, collection, embedder, k=k, mode=mode, reranker=reranker)
-    text = gen.generate(question, chunks, client=llm)
-    return {
-        "answer": text,
-        "chunks": chunks,
-        "sources": [] if text == gen.NOT_FOUND_ANSWER else sources_of(chunks),
-    }
+    return answer_from_chunks(question, chunks, llm=llm)
