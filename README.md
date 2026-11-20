@@ -12,7 +12,8 @@ Stack: `sentence-transformers` (embeddings, reranking), `chromadb` (vector store
 | Policy documents with a planted data quality issue | Done |
 | Minimal embed-store-retrieve loop | Done |
 | Container (Dockerfile, docker-compose) | Done |
-| Chunking, full vector store, RAG pipeline, hybrid search, reranking, eval harness, diagnosis, source attribution | Not started |
+| Chunking, embedding and persistent vector store at full scale | Done |
+| RAG pipeline, hybrid search, reranking, eval harness, diagnosis, source attribution | Not started |
 
 This README grows as each step lands. The full plan is tracked in Linear (project "RAG System").
 
@@ -104,6 +105,41 @@ OK: the relevant text ranks first.
 
 On macOS you may see `Redirects are currently not supported in MacOs` from PyTorch. It is harmless.
 
+### Chunking, embedding and vector store
+
+```bash
+python scripts/02_ingest.py            # incremental sync of the corpus into the vector store
+python scripts/02_ingest.py --rebuild  # drop the collection and re-embed everything
+python scripts/03_check_retrieval.py   # ask a few questions against the real collection
+# in the container:
+docker compose run --rm app python scripts/02_ingest.py
+docker compose run --rm app python scripts/03_check_retrieval.py
+```
+
+Code: `src/rag/chunking.py`, `embeddings.py`, `store.py`. All five documents are ingested, including the older PTO policy.
+
+**Incremental ingest.** `store.sync` makes the collection match `data/raw/` with the least work:
+
+- Each stored chunk carries a `content_hash` of (embedding model + chunk settings, doc name, chunk index, section, text), so metadata changes are picked up too.
+- Unchanged chunks are skipped and never embedded again. With no edits, the model is not even loaded.
+- New and changed chunks are embedded and upserted first. Stale chunks are deleted last, so a failed run (download error, out of memory, Ctrl-C) never leaves the index with fewer chunks than before.
+- Chunks that no longer exist (an edited or removed document) are deleted, so removing a document removes it from the index. The control test in the diagnosis step relies on this.
+- Changing the embedding model or the chunk size changes every hash, so everything is re-embedded instead of leaving stale vectors. `--rebuild` forces a clean slate.
+- The collection must use cosine distance. One created with another distance space is rejected with an error telling you to run `--rebuild`, instead of silently ranking wrongly.
+- IDs stay `<doc_name>::<chunk_index>`. Inserting a section mid-document shifts later indexes, so those chunks are re-embedded.
+
+**Chunking rationale** (values in `src/rag/config.py`):
+
+- **Section-aware.** The documents have numbered `##` sections that are short (31-156 words, mean about 90) and each covers one topic. A chunk is one section whenever it fits, so a fact stays with its context, and the section name gives clean source attribution later.
+- **Cap of 120 words.** The embedding model truncates input at 256 tokens. 120 words plus the header line measured at most 197 tokens, so nothing is cut off. Smaller chunks also retrieve more precisely than whole documents (about 650 words).
+- **Splitting.** A section over the cap is packed from its `###` subsections and never cut inside one. This splits 5 of the 50 sections.
+- **Overlap of 20 words (about 17%).** Applies only when a single block is still over the cap and has to be cut into word windows, so a fact on the boundary appears in both neighbours. No block in the current corpus needs this. The behaviour is covered by a unit test on synthetic text.
+- **Preamble and headings.** The title block (effective date, owner, any intro) becomes a "Document header" chunk under the same size cap. Headings inside fenced code blocks are not treated as sections. Files are read as UTF-8.
+- **Header line.** Each chunk starts with `<document title> - <section>`, so it reads on its own and keyword search can match the section name.
+- **Metadata:** `doc_name`, `section`, `chunk_index`. IDs are `<doc_name>::<chunk_index>`.
+
+Result: 50 chunks (expense 10, PTO 10, PTO v1 11, remote work 9, security 10).
+
 ## Tests
 
 ```bash
@@ -111,7 +147,12 @@ pytest -v                          # local venv
 docker compose run --rm app        # container
 ```
 
-Currently these are smoke tests (imports and config values). Tests for chunking, retrieval recall and answer accuracy arrive with their tickets.
+- `test_smoke.py`: imports and config values.
+- `test_chunking.py`: size cap, subsection splitting, overlap, metadata, header chunk (capped too), code fences, titles, UTF-8, deterministic IDs.
+- `test_store.py`: incremental sync (first ingest, no-op re-run embeds nothing, only the changed chunk is re-embedded, new chunks added, removed chunks deleted, failed embedding loses nothing, wrong distance space rejected, fingerprint change and `--rebuild` re-embed all) and nearest-first query. Uses a fake embedder, so no model download is needed.
+- `test_retrieval_check.py`: the pass/fail logic of `scripts/03_check_retrieval.py` (right document and section first, required documents present).
+
+Retrieval recall and answer accuracy tests arrive with the evaluation ticket.
 
 ## Lint and formatting
 
@@ -155,9 +196,12 @@ Settings live in [src/rag/config.py](src/rag/config.py):
 │   ├── raw/                 # generated policy documents
 │   └── generate_docs.py     # LLM document generator
 ├── docs/planted_issue.md    # the planted data quality issue
-├── scripts/01_minimal_loop.py
-├── src/rag/config.py
-└── tests/test_smoke.py
+├── scripts/
+│   ├── 01_minimal_loop.py   # two-text proof
+│   ├── 02_ingest.py         # chunk + embed + store the corpus
+│   └── 03_check_retrieval.py
+├── src/rag/                 # config, chunking, embeddings, store
+└── tests/                   # smoke, chunking, store
 ```
 
 Empty directories `eval/` and `docs/screenshots/` are placeholders for later steps.
